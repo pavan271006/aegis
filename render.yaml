@@ -1,0 +1,25 @@
+# Render blueprint — free FastAPI backend for AEGIS.
+# In Render: New → Blueprint → connect this repo. Render reads this file and
+# creates the service on the free plan (no card required).
+#
+# After it deploys you'll get a URL like https://aegis-backend.onrender.com.
+# Build the frontend with VITE_API_BASE set to that URL, then deploy to Firebase.
+services:
+  - type: web
+    name: aegis-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: API_KEY
+        generateValue: true        # Render generates a strong random value
+      - key: RESPONSE_MODE
+        value: dry-run
+      - key: GEOIP_ENABLED
+        value: "true"
+      - key: DATABASE_URL
+        value: sqlite:////tmp/aegis.db

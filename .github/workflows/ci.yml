@@ -1,0 +1,22 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install deps
+        working-directory: backend
+        run: pip install fastapi sqlalchemy "pydantic>=2" pydantic-settings httpx
+      - name: Smoke test (detection pipeline)
+        working-directory: backend
+        env:
+          GEOIP_ENABLED: "false"
+          DATABASE_URL: "sqlite:///./ci.db"
+        run: python -m tests.smoke

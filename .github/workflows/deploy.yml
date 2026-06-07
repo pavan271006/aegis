@@ -1,0 +1,94 @@
+name: Deploy
+
+# Auto-deploys on every push to main (and on manual run):
+#   • backend  -> Google Cloud Run
+#   • frontend -> Firebase Hosting
+#
+# ── Required GitHub repository secrets (Settings → Secrets and variables → Actions) ──
+#   GCP_PROJECT_ID   your Firebase/GCP project id (e.g. aegis-prod)
+#   GCP_SA_KEY       JSON key for a service account (paste the whole file contents)
+#   AEGIS_API_KEY    a long random string; the backend uses it for the shipper
+#                    and to sign login JWTs
+#
+# ── Roles the service account needs ──
+#   Cloud Run Admin, Service Account User, Cloud Build Editor,
+#   Artifact Registry Admin, Storage Admin, Firebase Hosting Admin,
+#   Service Usage Admin (to enable APIs on first run)
+#
+# Create it with:
+#   gcloud iam service-accounts create aegis-deployer
+#   for r in run.admin iam.serviceAccountUser cloudbuild.builds.editor \
+#            artifactregistry.admin storage.admin firebasehosting.admin \
+#            serviceusage.serviceUsageAdmin; do
+#     gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+#       --member="serviceAccount:aegis-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+#       --role="roles/$r"; done
+#   gcloud iam service-accounts keys create key.json \
+#     --iam-account aegis-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com
+#   # paste key.json into the GCP_SA_KEY secret
+
+# NOTE: This Cloud Run pipeline is OPT-IN only (manual run). The current free
+# setup deploys the backend to Render and the frontend to Firebase Hosting, so
+# this workflow does not run on push. Keep it if you later move to Cloud Run.
+on:
+  workflow_dispatch: {}
+
+env:
+  GCP_REGION: us-central1
+  SERVICE: aegis-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Authenticate to Google Cloud ----
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Enable required APIs (no-op after first run)
+        run: |
+          gcloud services enable \
+            run.googleapis.com \
+            cloudbuild.googleapis.com \
+            artifactregistry.googleapis.com \
+            firebasehosting.googleapis.com
+
+      # ---- Backend -> Cloud Run (service name must match firebase.json) ----
+      - name: Deploy backend to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --source backend \
+            --region "$GCP_REGION" \
+            --allow-unauthenticated \
+            --min-instances 1 --max-instances 1 \
+            --set-env-vars "API_KEY=${{ secrets.AEGIS_API_KEY }},RESPONSE_MODE=dry-run,GEOIP_ENABLED=true"
+
+      # ---- Frontend build ----
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # ---- Frontend -> Firebase Hosting (reuses the same service account) ----
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.GCP_SA_KEY }}
+          projectId: ${{ secrets.GCP_PROJECT_ID }}
+          channelId: live
