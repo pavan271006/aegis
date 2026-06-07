@@ -8,15 +8,17 @@ import {
 /* ════════════════════════════════════════════════════════════════════════
    MONITORING PAGE
    ════════════════════════════════════════════════════════════════════════ */
-export default function Monitoring() {
+export default function Monitoring({ siteId, sites }) {
   const [history, setHistory] = useState(null);
   const [crowdsec, setCrowdsec] = useState(null);
   const [checking, setChecking] = useState(false);
 
+  const activeSite = (sites || []).find((s) => String(s.id) === String(siteId));
+
   const load = useCallback(() => {
-    api.monitoringHistory().then(setHistory).catch(() => {});
+    api.monitoringHistory(siteId).then(setHistory).catch(() => {});
     api.crowdsec().then(setCrowdsec).catch(() => setCrowdsec([]));
-  }, []);
+  }, [siteId]);
 
   useEffect(() => { load(); }, [load]);
   useInterval(load, 30000);
@@ -24,7 +26,7 @@ export default function Monitoring() {
   async function runCheck() {
     setChecking(true);
     try {
-      await api.triggerCheck();
+      await api.triggerCheck(siteId);
       notify("Monitoring check started.", "success");
       setTimeout(load, 2000);
     } catch (e) {
@@ -43,7 +45,7 @@ export default function Monitoring() {
           <Icon name="play" size={14} /> {checking ? "Running…" : "Run Check Now"}
         </button>
       }>
-        Site Monitoring
+        {activeSite ? `Monitoring — ${activeSite.name || activeSite.url}` : "Site Monitoring"}
       </SectionTitle>
 
       {/* Current Status */}

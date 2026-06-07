@@ -206,7 +206,7 @@ function ViewToggle({ isExecutive, setIsExecutive }) {
 /* ════════════════════════════════════════════════════════════════════════
    DASHBOARD
    ════════════════════════════════════════════════════════════════════════ */
-export default function Dashboard({ onOpenIncident }) {
+export default function Dashboard({ onOpenIncident, siteId }) {
   const [dash, setDash] = useState(null);
   const [stats, setStats] = useState(null);
   const [incidents, setIncidents] = useState(null);
@@ -218,9 +218,9 @@ export default function Dashboard({ onOpenIncident }) {
   const load = useCallback(() => {
     setRefreshing(true);
     Promise.all([
-      api.dashboard().catch(() => null),
-      api.dashboardStats().catch(() => null),
-      api.incidents().catch(() => null),
+      api.dashboard(siteId).catch(() => null),
+      api.dashboardStats(siteId).catch(() => null),
+      api.incidents(siteId).catch(() => null),
       api.threatFeed().catch(() => null),
       api.postureTrends().catch(() => []),
     ]).then(([d, s, inc, feed, post]) => {
@@ -231,7 +231,7 @@ export default function Dashboard({ onOpenIncident }) {
       if (post) setPosture(post);
       setRefreshing(false);
     });
-  }, []);
+  }, [siteId]);
 
   useEffect(() => { load(); }, [load]);
   useInterval(load, 15000);

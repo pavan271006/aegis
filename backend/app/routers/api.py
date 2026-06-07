@@ -72,10 +72,12 @@ async def upload_check(file: UploadFile = File(...), db: Session = Depends(get_d
 
 # ---- Incidents ----
 @incidents_router.get("", response_model=list[IncidentOut])
-def list_incidents(status: str | None = None, limit: int = 50, db: Session = Depends(get_db)):
+def list_incidents(status: str | None = None, site_id: int | None = None, limit: int = 50, db: Session = Depends(get_db)):
     q = db.query(Incident).order_by(Incident.created_at.desc())
     if status:
         q = q.filter(Incident.status == status)
+    if site_id:
+        q = q.filter(Incident.site_id == site_id)
     return q.limit(limit).all()
 
 
@@ -129,44 +131,55 @@ def export_incident_report(incident_id: int, db: Session = Depends(get_db)):
 
 # ---- Dashboard ----
 @dashboard_router.get("", response_model=DashboardOut)
-def dashboard(db: Session = Depends(get_db)):
-    stats = scoring.compute(db)
-    recent = db.query(Incident).order_by(Incident.created_at.desc()).limit(10).all()
+def dashboard(site_id: int | None = None, db: Session = Depends(get_db)):
+    stats = scoring.compute(db, site_id)
+    recent_q = db.query(Incident).order_by(Incident.created_at.desc())
+    if site_id:
+        recent_q = recent_q.filter(Incident.site_id == site_id)
+    recent = recent_q.limit(10).all()
     return DashboardOut(recent_reports=recent, **stats)
 
 
 @dashboard_router.get("/stats", response_model=StatsOut)
-def dashboard_stats(db: Session = Depends(get_db)):
+def dashboard_stats(site_id: int | None = None, db: Session = Depends(get_db)):
     now = dt.datetime.now(dt.timezone.utc)
     day_ago = now - dt.timedelta(hours=24)
     seven_days_ago = now - dt.timedelta(days=7)
-    
-    total_events = db.query(Event).count()
-    total_incidents = db.query(Incident).count()
-    total_blocked = db.query(Action).filter(Action.type == "block_ip", Action.status.like("applied%")).count()
-    
-    events_24h = db.query(Event).filter(Event.ts >= day_ago).count()
-    incidents_24h = db.query(Incident).filter(Incident.created_at >= day_ago).count()
-    
+
+    def site_inc(q):
+        return q.filter(Incident.site_id == site_id) if site_id else q
+    def site_evt(q):
+        return q.filter(Event.site_id == site_id) if site_id else q
+
+    total_events = site_evt(db.query(Event)).count()
+    total_incidents = site_inc(db.query(Incident)).count()
+    blocked_q = db.query(Action).filter(Action.type == "block_ip", Action.status.like("applied%"))
+    if site_id:
+        blocked_q = blocked_q.join(Incident, Action.incident_id == Incident.id).filter(Incident.site_id == site_id)
+    total_blocked = blocked_q.count()
+
+    events_24h = site_evt(db.query(Event).filter(Event.ts >= day_ago)).count()
+    incidents_24h = site_inc(db.query(Incident).filter(Incident.created_at >= day_ago)).count()
+
     # Severity distribution
     severity_distribution = {"high": 0, "medium": 0, "low": 0}
-    sev_rows = db.query(Incident.severity, func.count(Incident.id)).group_by(Incident.severity).all()
+    sev_rows = site_inc(db.query(Incident.severity, func.count(Incident.id))).group_by(Incident.severity).all()
     for sev, count in sev_rows:
         if sev in severity_distribution:
             severity_distribution[sev] = count
-            
+
     # Top threat types (aggregated in python from last 7 days)
-    recent_incidents = db.query(Incident).filter(Incident.created_at >= seven_days_ago).all()
+    recent_incidents = site_inc(db.query(Incident).filter(Incident.created_at >= seven_days_ago)).all()
     threat_counts = {}
     for inc in recent_incidents:
         for t in (inc.threat_types or []):
             threat_counts[t] = threat_counts.get(t, 0) + 1
     top_threat_types = sorted([{"type": k, "count": v} for k, v in threat_counts.items()], key=lambda x: x["count"], reverse=True)
-    
+
     # Top source IPs
-    ip_rows = db.query(Incident.source_ip, func.count(Incident.id)).group_by(Incident.source_ip).order_by(func.count(Incident.id).desc()).limit(10).all()
+    ip_rows = site_inc(db.query(Incident.source_ip, func.count(Incident.id))).group_by(Incident.source_ip).order_by(func.count(Incident.id).desc()).limit(10).all()
     top_source_ips = [{"ip": ip, "count": count} for ip, count in ip_rows]
-    
+
     # Incidents by day (last 7 days)
     day_counts = {}
     for i in range(7):
@@ -491,7 +504,7 @@ def get_posture_trends(db: Session = Depends(get_db), user = Depends(auth_svc.ge
     from ..models import PostureTrend
     import datetime as dt
     
-    if db.query(PostureTrend).count() == 0:
+    if False:  # disabled: never fabricate posture history; show only real recorded points
         now = dt.datetime.now(dt.timezone.utc)
         months = [
             (now - dt.timedelta(days=150), 71),

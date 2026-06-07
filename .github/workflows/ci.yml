@@ -13,7 +13,7 @@ jobs:
         with: { python-version: "3.12" }
       - name: Install deps
         working-directory: backend
-        run: pip install fastapi sqlalchemy "pydantic>=2" pydantic-settings httpx
+        run: pip install -r requirements.txt
       - name: Smoke test (detection pipeline)
         working-directory: backend
         env:

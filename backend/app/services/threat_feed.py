@@ -20,7 +20,7 @@ GLOBAL_FEEDS = [
 
 def get_active_feeds(db: Session) -> list[dict]:
     """Retrieve combined threat intelligence lists (global seeds + CrowdSec decisions)."""
-    feed_list = list(GLOBAL_FEEDS)
+    feed_list = []  # real CrowdSec decisions only — no fabricated sample IPs
 
     # Fetch real live decisions from CrowdSec if configured
     decisions = crowdsec.pull_decisions()

@@ -123,6 +123,14 @@ export default function App() {
   const [incidentDrawerId, setIncidentDrawerId] = useState(null);
   const [user, setUser] = useState(null);
   const [loadingUser, setLoadingUser] = useState(true);
+  const [sites, setSites] = useState([]);
+  const [siteId, setSiteId] = useState(() => localStorage.getItem("aegis_site") || "");
+
+  const changeSite = useCallback((v) => {
+    setSiteId(v);
+    if (v) localStorage.setItem("aegis_site", v);
+    else localStorage.removeItem("aegis_site");
+  }, []);
 
   const checkUser = useCallback(async () => {
     const token = localStorage.getItem("aegis_token");
@@ -147,6 +155,10 @@ export default function App() {
 
   useEffect(() => { checkUser(); }, [checkUser, page]);
   useEffect(() => { setSidebarOpen(false); }, [page]);
+  useEffect(() => {
+    if (!user) return;
+    api.sites().then((s) => setSites(Array.isArray(s) ? s : [])).catch(() => {});
+  }, [user]);
 
   const openIncident = useCallback((id) => setIncidentDrawerId(id), []);
 
@@ -165,11 +177,11 @@ export default function App() {
 
   function renderPage() {
     switch (page) {
-      case "incidents":  return <Incidents user={user} />;
-      case "monitoring": return <Monitoring user={user} />;
+      case "incidents":  return <Incidents user={user} siteId={siteId} />;
+      case "monitoring": return <Monitoring user={user} siteId={siteId} sites={sites} />;
       case "admin":      return <Admin user={user} />;
       case "audit":      return <AuditLog user={user} />;
-      default:           return <Dashboard user={user} onOpenIncident={openIncident} />;
+      default:           return <Dashboard user={user} siteId={siteId} onOpenIncident={openIncident} />;
     }
   }
 
@@ -242,6 +254,19 @@ export default function App() {
               <div className="topbar__title">{PAGE_TITLES[page] || "Dashboard"}</div>
             </div>
             <div className="topbar__right">
+              {sites.length > 0 && (
+                <select
+                  className="site-select"
+                  value={siteId}
+                  onChange={(e) => changeSite(e.target.value)}
+                  title="Filter by site"
+                >
+                  <option value="">All sites</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name || s.url}</option>
+                  ))}
+                </select>
+              )}
               <LiveDot />
               <span className="topbar__crumb">Live · auto-refresh</span>
             </div>

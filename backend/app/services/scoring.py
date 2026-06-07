@@ -14,18 +14,24 @@ def _recent(days=7):
     return dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
 
 
-def compute(db: Session) -> dict:
+def compute(db: Session, site_id: int | None = None) -> dict:
     since = _recent()
 
-    open_incidents = db.query(Incident).filter(Incident.status == "open").count()
-    high_recent = (db.query(Incident)
-                   .filter(Incident.created_at >= since, Incident.severity == "high").count())
-    threats_blocked = (db.query(Action)
-                       .filter(Action.type == "block_ip",
-                               Action.status.like("applied%")).count())
+    open_q = db.query(Incident).filter(Incident.status == "open")
+    high_q = db.query(Incident).filter(Incident.created_at >= since, Incident.severity == "high")
+    blocked_q = db.query(Action).filter(Action.type == "block_ip", Action.status.like("applied%"))
+    mon_q = db.query(MonitoringCheck)
+    if site_id:
+        open_q = open_q.filter(Incident.site_id == site_id)
+        high_q = high_q.filter(Incident.site_id == site_id)
+        blocked_q = blocked_q.join(Incident, Action.incident_id == Incident.id).filter(Incident.site_id == site_id)
+        mon_q = mon_q.filter(MonitoringCheck.site_id == site_id)
 
-    latest = (db.query(MonitoringCheck)
-              .order_by(MonitoringCheck.ts.desc()).first())
+    open_incidents = open_q.count()
+    high_recent = high_q.count()
+    threats_blocked = blocked_q.count()
+
+    latest = mon_q.order_by(MonitoringCheck.ts.desc()).first()
     missing_headers = len(latest.missing_headers) if latest and latest.missing_headers else 0
     ssl_soon = 1 if (latest and latest.ssl_days_left is not None and latest.ssl_days_left < 21) else 0
     down = 1 if (latest and latest.up is False) else 0

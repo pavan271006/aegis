@@ -219,6 +219,19 @@ a:hover { text-decoration: underline; }
 .topbar__title { font-family: var(--font-head); font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
 .topbar__crumb { font-size: 12px; color: var(--muted); }
 .topbar__right { display: flex; align-items: center; gap: 14px; }
+.site-select {
+  appearance: none; -webkit-appearance: none;
+  background-color: var(--bg-alt);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2398a2b3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 13px;
+  border: 1px solid var(--line); color: var(--text);
+  font-family: var(--font-body); font-size: 12.5px; font-weight: 500;
+  padding: 6px 28px 6px 11px; border-radius: var(--radius-sm); cursor: pointer;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.site-select:hover { border-color: var(--signal); }
+.site-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--signal-dim); }
+.site-select option { background: var(--panel); color: var(--text); }
 .page-body { padding: 24px 28px 56px; max-width: 1320px; }
 
 /* ── Mobile menu ─────────────────────────────────────────────────────── */

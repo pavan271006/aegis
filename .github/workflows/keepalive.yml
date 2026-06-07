@@ -1,0 +1,12 @@
+name: keep-backend-awake
+# Pings the Render backend every 10 minutes so the free instance never idles
+# into a cold start. Free: runs on GitHub-hosted runners, unlimited on public repos.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS https://aegis-mpg6.onrender.com/health || true

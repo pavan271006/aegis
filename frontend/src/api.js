@@ -68,20 +68,20 @@ export const api = {
   me: () => get("/api/auth/me"),
 
   /* ── Dashboard ─────────────────────────────────────── */
-  dashboard:      ()  => get("/api/dashboard"),
-  dashboardStats: ()  => get("/api/dashboard/stats"),
-  postureTrends:  ()  => get("/api/dashboard/posture-trends"),
+  dashboard:      (siteId)  => get(`/api/dashboard${siteId ? `?site_id=${siteId}` : ""}`),
+  dashboardStats: (siteId)  => get(`/api/dashboard/stats${siteId ? `?site_id=${siteId}` : ""}`),
+  postureTrends:  ()        => get("/api/dashboard/posture-trends"),
 
   /* ── Incidents ─────────────────────────────────────── */
-  incidents:      ()     => get("/api/incidents"),
+  incidents:      (siteId)  => get(`/api/incidents${siteId ? `?site_id=${siteId}` : ""}`),
   incident:       (id)   => get(`/api/incidents/${id}`),
   resolve:        (id)   => post(`/api/incidents/${id}/resolve`),
   approveAction:  (id)   => post(`/api/incidents/actions/${id}/approve`),
   reportUrl:      (id)   => `${API_BASE}/api/incidents/${id}/report.html`,
 
   /* ── Monitoring ────────────────────────────────────── */
-  monitoringHistory: ()  => get("/api/monitoring/history/1"),
-  triggerCheck:      ()  => post("/api/monitoring/check/1"),
+  monitoringHistory: (siteId)  => get(`/api/monitoring/history/${siteId || 1}`),
+  triggerCheck:      (siteId)  => post(`/api/monitoring/check/${siteId || 1}`),
   crowdsec:          ()  => get("/api/monitoring/crowdsec"),
 
   /* ── Admin ─────────────────────────────────────────── */

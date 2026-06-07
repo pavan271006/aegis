@@ -339,15 +339,15 @@ function KVRow({ label, value }) {
 /* ════════════════════════════════════════════════════════════════════════
    INCIDENTS PAGE
    ════════════════════════════════════════════════════════════════════════ */
-export default function Incidents({ user }) {
+export default function Incidents({ user, siteId }) {
   const [incidents, setIncidents] = useState(null);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState(null);
 
   const load = useCallback(() => {
-    api.incidents().then(setIncidents).catch(() => {});
-  }, []);
+    api.incidents(siteId).then(setIncidents).catch(() => {});
+  }, [siteId]);
 
   useEffect(() => { load(); }, [load]);
   useInterval(load, 15000);
