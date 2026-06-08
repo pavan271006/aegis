@@ -138,6 +138,13 @@ class User(Base):
     role = Column(String(20), default="read_only")  # admin | analyst | read_only
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    
+    # Enterprise fields
+    mfa_enabled = Column(Boolean, default=False, nullable=False)
+    password_changed_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    failed_logins = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    is_superuser = Column(Boolean, default=False, nullable=False)
 
 
 class Vulnerability(Base):
