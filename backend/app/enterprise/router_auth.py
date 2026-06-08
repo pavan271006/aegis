@@ -25,11 +25,6 @@ router = APIRouter(prefix="/api/v2/auth", tags=["auth-v2"])
 SENTINEL = "00000000-0000-0000-0000-000000000000"
 
 
-@router.get("/debug_ping")
-def debug_ping():
-    return {"status": "ping_ok"}
-
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
@@ -76,40 +71,34 @@ def _mfa_challenge(db, user: User, m: Membership) -> str:
 
 @router.post("/login", dependencies=[Depends(limit(20, 60))])
 def login(body: LoginIn, request: Request):
-    import traceback
-    try:
-        with tenant_session(SENTINEL) as db:
-            email_lower = body.email.lower()
-            auth_throttle(email_lower, request.client.host)
-            user = db.query(User).filter(User.email == email_lower,
-                                         User.is_active.is_(True)).first()
-            now = dt.datetime.now(dt.timezone.utc)
-            if user and user.locked_until and user.locked_until > now:
-                raise HTTPException(status.HTTP_423_LOCKED, "account temporarily locked")
+    with tenant_session(SENTINEL) as db:
+        email_lower = body.email.lower()
+        auth_throttle(email_lower, request.client.host)
+        user = db.query(User).filter(User.email == email_lower,
+                                     User.is_active.is_(True)).first()
+        now = dt.datetime.now(dt.timezone.utc)
+        if user and user.locked_until and user.locked_until > now:
+            raise HTTPException(status.HTTP_423_LOCKED, "account temporarily locked")
 
-            if not user or not passwords.verify_password(body.password, user.hashed_password):
-                if user:   # constant-ish work + lockout counter
-                    user.failed_logins = (user.failed_logins or 0) + 1
-                    if user.failed_logins >= get_settings().max_failed_logins:
-                        user.locked_until = now + dt.timedelta(minutes=get_settings().lockout_minutes)
-                    db.commit()
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid email or password")
+        if not user or not passwords.verify_password(body.password, user.hashed_password):
+            if user:   # constant-ish work + lockout counter
+                user.failed_logins = (user.failed_logins or 0) + 1
+                if user.failed_logins >= get_settings().max_failed_logins:
+                    user.locked_until = now + dt.timedelta(minutes=get_settings().lockout_minutes)
+                db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid email or password")
 
-            user.failed_logins = 0
-            m = _default_org(db, user.id, body.org)
-            if not m:
-                raise HTTPException(status.HTTP_403_FORBIDDEN, "no active organization membership")
+        user.failed_logins = 0
+        m = _default_org(db, user.id, body.org)
+        if not m:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "no active organization membership")
 
-            if passwords.needs_rehash(user.hashed_password):
-                user.hashed_password = passwords.hash_password(body.password)
+        if passwords.needs_rehash(user.hashed_password):
+            user.hashed_password = passwords.hash_password(body.password)
 
-            if user.mfa_enabled or mfa.required_for(m.role):
-                return {"mfa_required": True, "challenge": _mfa_challenge(db, user, m)}
-            return _issue_pair(db, user, m, mfa_ok=False, request=request)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, detail=f"DEBUG ERROR: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}")
+        if user.mfa_enabled or mfa.required_for(m.role):
+            return {"mfa_required": True, "challenge": _mfa_challenge(db, user, m)}
+        return _issue_pair(db, user, m, mfa_ok=False, request=request)
 
 
 @router.post("/mfa", dependencies=[Depends(limit(20, 60))])
