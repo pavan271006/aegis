@@ -55,21 +55,26 @@ def setup(app: FastAPI) -> None:
     _configure_logging()
     log = logging.getLogger("aegis.request")
 
-    # OpenTelemetry (no-ops cleanly if the OTLP collector env isn't set).
-    try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    # OpenTelemetry tracing is OPT-IN: only wire the OTLP exporter when a collector
+    # endpoint is actually configured. Otherwise the BatchSpanProcessor would spam
+    # connection-refused errors trying to reach the default localhost:4318. Prometheus
+    # metrics + structured JSON logs below are always on.
+    import os
+    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        try:
+            from opentelemetry import trace
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        provider = TracerProvider(resource=Resource.create({"service.name": "aegis-api"}))
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-        trace.set_tracer_provider(provider)
-        FastAPIInstrumentor.instrument_app(app)
-    except Exception:  # pragma: no cover — tracing optional in dev
-        pass
+            provider = TracerProvider(resource=Resource.create({"service.name": "aegis-api"}))
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            trace.set_tracer_provider(provider)
+            FastAPIInstrumentor.instrument_app(app)
+        except Exception:  # pragma: no cover — tracing optional in dev
+            pass
 
     @app.middleware("http")
     async def _observe(request: Request, call_next):
