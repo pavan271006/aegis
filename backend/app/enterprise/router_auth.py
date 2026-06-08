@@ -53,11 +53,13 @@ def _default_org(db, user_id: int, requested: str | None) -> Membership | None:
     return q.order_by(Membership.created_at.asc()).first()
 
 
-def _issue_pair(db, user: User, m: Membership, mfa_ok: bool, req: Request) -> dict:
+def _issue_pair(db, user: User, m: Membership, mfa_ok: bool, request: Request) -> dict:
     access = tokens.issue_access(db, user_id=user.id, email=user.email,
                                  org_id=str(m.org_id), role=m.role, mfa=mfa_ok)
+    ip = request.client.host if (request and request.client) else ""
+    ua = request.headers.get("user-agent", "") if request else ""
     refresh = tokens.issue_refresh(db, user_id=user.id, org_id=str(m.org_id),
-                                   ip=req.client.host, ua=req.headers.get("user-agent", ""))
+                                   ip=ip, ua=ua)
     return {"access_token": access, "refresh_token": refresh,
             "token_type": "bearer", "org_id": str(m.org_id), "role": m.role,
             "expires_in": get_settings().access_ttl_seconds}
