@@ -37,12 +37,22 @@ def seed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
+    enterprise = os.getenv("AEGIS_ENTERPRISE") == "1"
     init_db()
-    seed()
-    from .services import scheduler
-    scheduler.start()
+    # Legacy single-tenant seeding inserts a default site + global honeypots (both
+    # RLS-protected tenant tables) and weak default users. Under multi-tenancy those
+    # inserts have no org context and are (correctly) rejected by RLS — and the weak
+    # default creds are undesirable. In enterprise mode, seeding is per-org via the
+    # bootstrap + onboarding flows, so skip the legacy seed entirely.
+    if not enterprise:
+        seed()
+        from .services import scheduler
+        scheduler.start()
     yield
-    scheduler.stop()
+    if not enterprise:
+        from .services import scheduler
+        scheduler.stop()
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
