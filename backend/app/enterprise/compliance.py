@@ -70,13 +70,18 @@ def gdpr_export(email: str, user: Principal = Depends(require("owner"))):
                    {"e": email.lower()}).first()
     if not u:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "subject not found")
-    memberships = db.execute(text("SELECT org_id,role,status FROM memberships WHERE user_id=:u"),
-                             {"u": u[0]}).all()
+    
+    # Check membership inside caller's organization only
+    m = db.execute(text("SELECT org_id,role,status FROM memberships WHERE user_id=:u AND org_id=:org"),
+                   {"u": u[0], "org": user.org_id}).first()
+    if not m:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subject not found in this organization")
+
     audit = db.execute(text("SELECT ts,action,details FROM audit_log WHERE details::text ILIKE :e LIMIT 1000"),
                        {"e": f"%{email}%"}).all()
     return {"subject": {"id": u[0], "email": u[1], "role": u[2],
                         "created_at": u[3].isoformat() if u[3] else None},
-            "memberships": [{"org_id": str(m[0]), "role": m[1], "status": m[2]} for m in memberships],
+            "memberships": [{"org_id": str(m[0]), "role": m[1], "status": m[2]}],
             "audit_references": [{"ts": a[0].isoformat(), "action": a[1]} for a in audit]}
 
 
@@ -87,18 +92,21 @@ def gdpr_erase(email: str, user: Principal = Depends(require("owner"))):
     if not u:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "subject not found")
     uid = u[0]
-    tombstone = f"erased+{hashlib.sha256(email.encode()).hexdigest()[:16]}@deleted.invalid"
+    
+    # Verify membership inside caller's organization
+    m = db.execute(text("SELECT id FROM memberships WHERE user_id=:u AND org_id=:org"),
+                   {"u": uid, "org": user.org_id}).first()
+    if not m:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subject not found in this organization")
+
+    # Delete tenant-scoped resources: membership and refresh sessions for this organization
     for stmt in (
-        "DELETE FROM mfa_credentials WHERE user_id=:u",
-        "DELETE FROM mfa_backup_codes WHERE user_id=:u",
-        "DELETE FROM refresh_sessions WHERE user_id=:u",
-        "DELETE FROM password_history WHERE user_id=:u",
-        "DELETE FROM memberships WHERE user_id=:u",
-        "UPDATE users SET email=:t, hashed_password='!erased', is_active=false, "
-        "mfa_enabled=false WHERE id=:u",
+        "DELETE FROM refresh_sessions WHERE user_id=:u AND org_id=:org",
+        "DELETE FROM memberships WHERE user_id=:u AND org_id=:org",
     ):
-        db.execute(text(stmt), {"u": uid, "t": tombstone})
-    append_audit(db, user.email, "gdpr_erase", {"subject_hash": tombstone})
+        db.execute(text(stmt), {"u": uid, "org": user.org_id})
+
+    append_audit(db, user.email, "gdpr_erase", {"subject_id": uid})
     return {"ok": True, "erased_user_id": uid}
 
 

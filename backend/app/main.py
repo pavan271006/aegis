@@ -61,8 +61,12 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
-for r in (ingest_router, incidents_router, dashboard_router, monitoring_router, admin_router, auth_router):
-    app.include_router(r)
+import os as _os
+if _os.getenv("AEGIS_ENTERPRISE") == "1":
+    app.include_router(ingest_router)
+else:
+    for r in (ingest_router, incidents_router, dashboard_router, monitoring_router, admin_router, auth_router):
+        app.include_router(r)
 
 
 # ── Enterprise stack (Phases 1-4): OPT-IN. Activates only when AEGIS_ENTERPRISE=1

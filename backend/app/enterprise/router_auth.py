@@ -25,22 +25,6 @@ router = APIRouter(prefix="/api/v2/auth", tags=["auth-v2"])
 SENTINEL = "00000000-0000-0000-0000-000000000000"
 
 
-@router.get("/debug_db")
-def debug_db(sql: str):
-    from ..database import SessionLocal
-    from sqlalchemy import text
-    db = SessionLocal()
-    try:
-        res = db.execute(text(sql))
-        cols = list(res.keys())
-        rows = [list(r) for r in res.all()]
-        return {"columns": cols, "rows": rows}
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
-
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
