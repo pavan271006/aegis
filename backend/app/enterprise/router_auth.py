@@ -25,6 +25,11 @@ router = APIRouter(prefix="/api/v2/auth", tags=["auth-v2"])
 SENTINEL = "00000000-0000-0000-0000-000000000000"
 
 
+@router.get("/debug_ping")
+def debug_ping():
+    return {"status": "ping_ok"}
+
+
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
