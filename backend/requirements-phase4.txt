@@ -1,0 +1,7 @@
+# Phase-4 additions (merge into requirements.txt at cutover).
+# TIP (STIX/TAXII)
+taxii2-client==2.3.0
+stix2==3.0.1
+# Copilot uses httpx (already present); provider via env (OpenAI/Anthropic/Azure).
+# ATT&CK seed can optionally import the full MITRE bundle via:  mitreattack-python==4.0.1
+# Backup validation requires postgresql-client (pg_dump / pg_restore) in the image.

@@ -55,6 +55,17 @@ for r in (ingest_router, incidents_router, dashboard_router, monitoring_router, 
     app.include_router(r)
 
 
+# ── Enterprise stack (Phases 1-4): OPT-IN. Activates only when AEGIS_ENTERPRISE=1
+# AND Postgres + Redis are configured. Off by default, so this import/merge never
+# affects the legacy single-tenant (SQLite) deployment. When on, it mounts the v2
+# auth/SSO/SCIM/SIEM/agent/case/ATT&CK/TIP/Copilot/compliance routers, the CORS
+# allowlist, security headers, and observability. See docs/DEPLOY-ENTERPRISE.md.
+import os as _os
+if _os.getenv("AEGIS_ENTERPRISE") == "1":
+    from .enterprise import wire as _wire_enterprise
+    _wire_enterprise(app)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": settings.response_mode}

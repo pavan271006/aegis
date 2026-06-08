@@ -1,0 +1,12 @@
+# Phase-2 additions (merge into requirements.txt at cutover).
+# SSO / SCIM
+python3-saml==1.16.0           # SAML (needs native libxml2 + xmlsec1)
+# OIDC uses PyJWT (already in phase 1) + httpx (already present)
+
+# Observability
+prometheus-client==0.21.1
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0

@@ -1,0 +1,40 @@
+# AEGIS Enterprise — Render-safe consolidated requirements.
+# Build command on the enterprise web service:  pip install -r requirements-render.txt
+# Deliberately EXCLUDES python3-saml (needs native libxml2/xmlsec1 not in Render's
+# Python image). SAML SSO is lazy-imported, so the app boots fine without it; OIDC
+# SSO, SCIM, and everything else work. Add SAML later via a Docker image with xmlsec1.
+
+# ── base ──
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+pydantic==2.10.4
+pydantic-settings==2.7.0
+httpx==0.28.1
+python-multipart==0.0.20
+redis==5.2.1
+apscheduler==3.10.4
+python-dotenv==1.0.1
+
+# ── phase 1: auth / crypto ──
+alembic==1.14.0
+PyJWT==2.10.1
+cryptography==44.0.0
+jwcrypto==1.5.6
+passlib[argon2]==1.7.4
+argon2-cffi==23.1.0
+email-validator==2.2.0
+pyotp==2.9.0
+
+# ── phase 2: observability (otel is lazy; prometheus_client is module-level) ──
+prometheus-client==0.21.1
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+
+# ── phase 4: TIP (taxii/stix are lazy, included for the poller) ──
+taxii2-client==2.3.0
+stix2==3.0.1
