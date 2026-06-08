@@ -5,6 +5,7 @@ import datetime as dt
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -21,6 +22,7 @@ class Site(Base):
     url = Column(String(500), nullable=False)
     cf_zone_id = Column(String(120), default="")
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
     incidents = relationship("Incident", back_populates="site")
 
@@ -38,6 +40,7 @@ class Event(Base):
     user_agent = Column(Text)
     geo = Column(String(120), default="")
     source = Column(String(40), default="log")   # log | webhook | crowdsec | honeypot
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class Incident(Base):
@@ -55,6 +58,7 @@ class Incident(Base):
     timeline = Column(JSON)                       # ordered list of steps
     report = Column(JSON)                         # full explainable report
     created_at = Column(DateTime(timezone=True), default=utcnow, index=True)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
     site = relationship("Site", back_populates="incidents")
     actions = relationship("Action", back_populates="incident")
@@ -74,6 +78,7 @@ class Action(Base):
     verified = Column(Boolean, default=False)
     expires_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
     incident = relationship("Incident", back_populates="actions")
 
@@ -86,6 +91,9 @@ class AuditLog(Base):
     actor = Column(String(40), default="system")  # system | founder
     action = Column(String(80))
     details = Column(JSON)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    prev_hash = Column(Text, nullable=True)
+    entry_hash = Column(Text, nullable=True)
 
 
 class MonitoringCheck(Base):
@@ -98,6 +106,7 @@ class MonitoringCheck(Base):
     response_ms = Column(Integer)
     ssl_days_left = Column(Integer)
     missing_headers = Column(JSON)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class Allowlist(Base):
@@ -106,6 +115,7 @@ class Allowlist(Base):
     id = Column(Integer, primary_key=True)
     value = Column(String(64), unique=True)        # IP or CIDR
     note = Column(String(200), default="")
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class Honeypot(Base):
@@ -114,6 +124,7 @@ class Honeypot(Base):
     id = Column(Integer, primary_key=True)
     path = Column(String(300), unique=True)        # e.g. /.env, /wp-admin/setup
     note = Column(String(200), default="")
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class QuarantinedFile(Base):
@@ -128,6 +139,7 @@ class QuarantinedFile(Base):
     status = Column(String(20), default="quarantined")  # quarantined | released | deleted
     uploaded_by_ip = Column(String(64), default="")
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class User(Base):
@@ -158,6 +170,7 @@ class Vulnerability(Base):
     evidence = Column(Text, default="")
     status = Column(String(20), default="open")  # open | resolved | false_positive
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 class PostureTrend(Base):
@@ -165,4 +178,5 @@ class PostureTrend(Base):
     id = Column(Integer, primary_key=True)
     ts = Column(DateTime(timezone=True), default=utcnow, index=True)
     score = Column(Integer, nullable=False)
+    org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 

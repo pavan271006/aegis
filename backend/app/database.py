@@ -11,6 +11,21 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+from sqlalchemy import event, text
+from sqlalchemy.orm import Session
+
+@event.listens_for(Session, "before_flush")
+def before_flush(session, flush_context, instances):
+    try:
+        org_id = session.execute(text("SELECT current_setting('app.current_org', true)")).scalar()
+        if org_id and org_id != "00000000-0000-0000-0000-000000000000":
+            for obj in session.new:
+                if hasattr(obj, "org_id") and getattr(obj, "org_id") is None:
+                    obj.org_id = org_id
+    except Exception:
+        pass
+
+
 def get_db():
     db = SessionLocal()
     try:
