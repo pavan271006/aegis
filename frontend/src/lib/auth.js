@@ -1,78 +1,83 @@
-// Phase-1 enterprise auth client: access/refresh handling, transparent refresh,
-// MFA step-up, and active-org tracking. Access token is kept in memory (not
-// localStorage) to reduce XSS blast radius; refresh token is stored separately
-// and rotated on every use.
-const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
+// AEGIS Enterprise — session + token manager (v2 auth).
+//
+// Holds the access + refresh token pair, decodes the RS256 access token to read
+// identity/role/org/mfa claims (there is no /me endpoint — the JWT IS the identity),
+// schedules a silent refresh shortly before expiry, and emits a "session-expired"
+// event when refresh is no longer possible. Tokens are persisted so the session
+// survives a page reload (session recovery); refresh tokens rotate on every use.
 
-let _access = null;                       // in-memory only
+const ACCESS_KEY = "aegis_access";
+const REFRESH_KEY = "aegis_refresh";
 const ORG_KEY = "aegis_org";
-const RT_KEY = "aegis_rt";                // refresh token (rotated, single-use)
 
-export const auth = {
-  getOrg: () => localStorage.getItem(ORG_KEY) || "",
-  setOrg: (id) => id ? localStorage.setItem(ORG_KEY, id) : localStorage.removeItem(ORG_KEY),
-
-  async login(email, password, org) {
-    const r = await post("/api/v2/auth/login", { email, password, org });
-    if (r.mfa_required) return { mfaChallenge: r.challenge }; // caller shows MFA UI
-    this._store(r);
-    return { ok: true };
-  },
-
-  async completeMfa(challenge, code) {
-    const r = await post("/api/v2/auth/mfa", { challenge, code });
-    this._store(r);
-    return { ok: true };
-  },
-
-  async logout() {
-    const rt = localStorage.getItem(RT_KEY);
-    if (rt) await post("/api/v2/auth/logout", { refresh_token: rt }).catch(() => {});
-    _access = null;
-    localStorage.removeItem(RT_KEY);
-  },
-
-  async switchOrg(orgId) {
-    const r = await this.fetch("/api/v2/auth/switch?org=" + encodeURIComponent(orgId), { method: "POST" });
-    const data = await r.json();
-    this._store(data);
-  },
-
-  // Authenticated fetch with one transparent refresh-and-retry on 401.
-  async fetch(path, opts = {}) {
-    const doFetch = () => fetch(BASE + path, {
-      ...opts,
-      headers: { ...(opts.headers || {}), Authorization: `Bearer ${_access}` },
-    });
-    let res = await doFetch();
-    if (res.status === 401 && (await this._refresh())) res = await doFetch();
-    return res;
-  },
-
-  async _refresh() {
-    const rt = localStorage.getItem(RT_KEY);
-    if (!rt) return false;
-    const r = await fetch(BASE + "/api/v2/auth/refresh", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: rt }),
-    });
-    if (!r.ok) { _access = null; localStorage.removeItem(RT_KEY); return false; }
-    this._store(await r.json());
-    return true;
-  },
-
-  _store(r) {
-    _access = r.access_token;
-    if (r.refresh_token) localStorage.setItem(RT_KEY, r.refresh_token);
-    if (r.org_id) this.setOrg(r.org_id);
-  },
-};
-
-async function post(path, body) {
-  const r = await fetch(BASE + path, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
-  return r.json();
+const listeners = { expired: new Set(), change: new Set() };
+export function on(event, fn) {
+  (listeners[event] ||= new Set()).add(fn);
+  return () => listeners[event].delete(fn);
 }
+function emit(event) {
+  (listeners[event] || []).forEach((fn) => { try { fn(); } catch { /* noop */ } });
+}
+
+// ── storage ────────────────────────────────────────────────────────────────
+export function getAccess() { return localStorage.getItem(ACCESS_KEY) || ""; }
+export function getRefresh() { return localStorage.getItem(REFRESH_KEY) || ""; }
+export function getActiveOrg() { return localStorage.getItem(ORG_KEY) || ""; }
+
+export function setTokens({ access_token, refresh_token, org_id }) {
+  if (access_token) localStorage.setItem(ACCESS_KEY, access_token);
+  if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token);
+  if (org_id) localStorage.setItem(ORG_KEY, org_id);
+  scheduleRefresh();
+  emit("change");
+}
+
+export function clearTokens() {
+  [ACCESS_KEY, REFRESH_KEY, ORG_KEY].forEach((k) => localStorage.removeItem(k));
+  if (_timer) clearTimeout(_timer);
+  emit("change");
+}
+
+// ── JWT decode (verification is the server's job) ──────────────────────────
+export function decode(token = getAccess()) {
+  try {
+    const p = token.split(".")[1];
+    return JSON.parse(decodeURIComponent(escape(atob(p.replace(/-/g, "+").replace(/_/g, "/")))));
+  } catch { return null; }
+}
+
+export function identity() {
+  const c = decode() || {};
+  return {
+    userId: c.sub, email: c.email || "", org: c.org || getActiveOrg(),
+    role: c.role || "read_only", mfa: !!c.mfa, exp: c.exp || 0,
+  };
+}
+
+function expired() {
+  const c = decode();
+  return !c || !c.exp || Date.now() / 1000 >= c.exp;
+}
+export function isAuthed() { return !!getAccess() && !expired(); }
+// We can recover a session (silent refresh) if the access token is gone/expired
+// but a refresh token is still present.
+export function canRecover() { return !isAuthed() && !!getRefresh(); }
+
+// ── role gate ──────────────────────────────────────────────────────────────
+const RANK = { read_only: 0, analyst: 1, admin: 2, owner: 3 };
+export function hasRole(min) { return (RANK[identity().role] ?? -1) >= (RANK[min] ?? 99); }
+
+// ── silent refresh ─────────────────────────────────────────────────────────
+let _timer = null;
+let _refresher = null;                       // injected by api.js (avoid circular import)
+export function registerRefresher(fn) { _refresher = fn; scheduleRefresh(); }
+
+export function scheduleRefresh() {
+  if (_timer) clearTimeout(_timer);
+  const c = decode();
+  if (!c || !c.exp || !_refresher) return;
+  const ms = Math.max((c.exp - 60) * 1000 - Date.now(), 5000); // 60s before expiry
+  _timer = setTimeout(() => { _refresher().catch(() => sessionExpired()); }, ms);
+}
+
+export function sessionExpired() { clearTokens(); emit("expired"); }

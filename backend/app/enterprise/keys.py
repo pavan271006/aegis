@@ -40,14 +40,21 @@ def _generate() -> SigningKey:
 
 
 def get_active(db: Session) -> SigningKey:
-    key = (db.query(SigningKey)
-             .filter(SigningKey.status == "active")
-             .order_by(SigningKey.created_at.desc()).first())
-    if key is None:
-        key = _generate()
-        db.add(key)
-        db.commit()
-    return key
+    while True:
+        key = (db.query(SigningKey)
+                 .filter(SigningKey.status == "active")
+                 .order_by(SigningKey.created_at.desc()).first())
+        if key is None:
+            key = _generate()
+            db.add(key)
+            db.flush()
+            return key
+        try:
+            private_pem(key)
+            return key
+        except Exception:
+            key.status = "revoked"
+            db.flush()
 
 
 def private_pem(key: SigningKey) -> bytes:
@@ -60,7 +67,7 @@ def rotate(db: Session) -> SigningKey:
         k.status = "retiring"
     new = _generate()
     db.add(new)
-    db.commit()
+    db.flush()
     return new
 
 

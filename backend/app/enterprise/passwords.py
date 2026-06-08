@@ -20,13 +20,27 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
+        if hashed and hashed.startswith("pbkdf2_sha256$"):
+            import base64, hashlib, hmac
+            parts = hashed.split("$")
+            if len(parts) == 4:
+                _, rounds, salt, dk_base64 = parts
+                dk_expected = base64.b64decode(dk_base64)
+                dk_actual = hashlib.pbkdf2_hmac('sha256', plain.encode(), salt.encode(), int(rounds))
+                if hmac.compare_digest(dk_expected, dk_actual):
+                    return True
         return _pwd.verify(plain, hashed)
     except Exception:
         return False
 
 
 def needs_rehash(hashed: str) -> bool:
-    return _pwd.needs_update(hashed)
+    if hashed and hashed.startswith("pbkdf2_sha256$"):
+        return True
+    try:
+        return _pwd.needs_update(hashed)
+    except Exception:
+        return True
 
 
 def policy_errors(password: str) -> list[str]:

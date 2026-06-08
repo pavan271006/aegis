@@ -70,8 +70,9 @@ def _mfa_challenge(db, user: User, m: Membership) -> str:
 @router.post("/login", dependencies=[Depends(limit(20, 60))])
 def login(body: LoginIn, request: Request):
     with tenant_session(SENTINEL) as db:
-        auth_throttle(body.email, request.client.host)
-        user = db.query(User).filter(User.email == body.email,
+        email_lower = body.email.lower()
+        auth_throttle(email_lower, request.client.host)
+        user = db.query(User).filter(User.email == email_lower,
                                      User.is_active.is_(True)).first()
         now = dt.datetime.now(dt.timezone.utc)
         if user and user.locked_until and user.locked_until > now:

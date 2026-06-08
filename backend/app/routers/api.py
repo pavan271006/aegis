@@ -419,7 +419,8 @@ def get_threat_feed(db: Session = Depends(get_db)):
 @auth_router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     from ..models import User
-    user = db.query(User).filter(User.email == body.email, User.is_active == True).first()
+    email_lower = body.email.lower()
+    user = db.query(User).filter(User.email == email_lower, User.is_active == True).first()
     if not user or not auth_svc.verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     

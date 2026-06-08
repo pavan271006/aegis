@@ -1,124 +1,137 @@
-// AEGIS Enterprise — Full API client with JWT support
+// AEGIS Enterprise — v2 API client.
+//
+// Every request carries the v2 RS256 access token as a Bearer. On a 401 the client
+// transparently refreshes once and retries; if that fails the session is expired.
+// Errors are normalised to ApiError{status,message} and surfaced as toasts. No page
+// in this app talks to the legacy /api/* single-tenant endpoints — only /api/v2/*.
 
-// Base URL for the backend API.
-//  • Local dev / same-origin (Cloud Run behind Hosting): leave VITE_API_BASE unset → "".
-//  • Split hosting (frontend on Firebase, backend on Render): set
-//    VITE_API_BASE=https://your-service.onrender.com at build time.
-const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
+import * as session from "./lib/auth.js";
+import { notify } from "./components/shared.jsx";
 
-function getHeaders() {
-  const headers = { "Content-Type": "application/json" };
-  const token = localStorage.getItem("aegis_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  return headers;
+const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
+export const API_BASE = BASE;
+
+export class ApiError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
 }
 
-async function get(path) {
-  const r = await fetch(API_BASE + path, { headers: getHeaders() });
-  if (r.status === 401) {
-    localStorage.removeItem("aegis_token");
-    window.location.hash = "#/login";
+const MESSAGES = {
+  400: "Bad request.",
+  403: "You don't have permission to do that.",
+  404: "Not found.",
+  423: "Account temporarily locked. Try again later.",
+  429: "Rate limit reached — slow down a moment.",
+  500: "Server error. Please try again.",
+};
+
+let _refreshing = null;                                   // de-dupe concurrent refreshes
+async function refreshOnce() {
+  if (_refreshing) return _refreshing;
+  const rt = session.getRefresh();
+  if (!rt) return Promise.resolve(false);
+  _refreshing = (async () => {
+    try {
+      const r = await fetch(BASE + "/api/v2/auth/refresh", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!r.ok) return false;
+      session.setTokens(await r.json());
+      return true;
+    } catch { return false; } finally { _refreshing = null; }
+  })();
+  return _refreshing;
+}
+session.registerRefresher(async () => { if (!(await refreshOnce())) throw new Error("refresh failed"); });
+
+async function request(path, { method = "GET", body, query, auth = true, raw = false } = {}) {
+  const url = new URL(BASE + path, window.location.origin);
+  if (query) Object.entries(query).forEach(([k, v]) => v != null && url.searchParams.set(k, v));
+
+  const build = () => {
+    const headers = { "Content-Type": "application/json" };
+    const tok = session.getAccess();
+    if (auth && tok) headers["Authorization"] = `Bearer ${tok}`;
+    return fetch(url.toString().replace(window.location.origin, ""), {
+      method, headers, body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  };
+
+  let res = await build();
+  if (res.status === 401 && auth && session.getRefresh()) {
+    if (await refreshOnce()) res = await build();
   }
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
-  return r.json();
+
+  if (res.status === 401 && auth) { session.sessionExpired(); throw new ApiError(401, "Session expired."); }
+  if (!res.ok) {
+    let detail = MESSAGES[res.status] || `Request failed (${res.status}).`;
+    try { const j = await res.json(); if (j && j.detail) detail = typeof j.detail === "string" ? j.detail : detail; } catch { /* noop */ }
+    if (res.status !== 404) notify(detail, "error");          // 404s are often expected/empty
+    throw new ApiError(res.status, detail);
+  }
+  if (raw) return res;
+  if (res.status === 204) return null;
+  return res.json().catch(() => null);
 }
 
-async function post(path, body) {
-  const r = await fetch(API_BASE + path, {
-    method: "POST",
-    headers: getHeaders(),
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (r.status === 401) {
-    localStorage.removeItem("aegis_token");
-    window.location.hash = "#/login";
-  }
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
-  return r.json();
-}
-
-async function del(path) {
-  const r = await fetch(API_BASE + path, {
-    method: "DELETE",
-    headers: getHeaders(),
-  });
-  if (r.status === 401) {
-    localStorage.removeItem("aegis_token");
-    window.location.hash = "#/login";
-  }
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
-  return r.json();
-}
+const get = (p, query) => request(p, { query });
+const post = (p, body, query) => request(p, { method: "POST", body, query });
+const del = (p) => request(p, { method: "DELETE" });
 
 export const api = {
-  /* ── Authentication ────────────────────────────────── */
-  login: async (email, password) => {
-    const res = await post("/api/auth/login", { email, password });
-    if (res.access_token) {
-      localStorage.setItem("aegis_token", res.access_token);
-    }
-    return res;
+  // ── auth (v2) ──────────────────────────────────────────────────────────
+  login: (email, password, org) => request("/api/v2/auth/login", { method: "POST", body: { email, password, org }, auth: false }),
+  completeMfa: (challenge, code) => request("/api/v2/auth/mfa", { method: "POST", body: { challenge, code }, auth: false }),
+  logout: async () => {
+    const rt = session.getRefresh();
+    if (rt) { try { await request("/api/v2/auth/logout", { method: "POST", body: { refresh_token: rt }, auth: false }); } catch { /* noop */ } }
+    session.clearTokens();
   },
-  logout: () => {
-    localStorage.removeItem("aegis_token");
-    window.location.hash = "#/login";
-  },
-  me: () => get("/api/auth/me"),
+  listOrgs: () => get("/api/v2/auth/orgs"),
+  switchOrg: (org) => post("/api/v2/auth/switch", undefined, { org }),
+  mfaEnroll: () => post("/api/v2/auth/mfa/enroll"),
+  mfaConfirm: (code) => post("/api/v2/auth/mfa/confirm", undefined, { code }),
+  ssoStartUrl: (connId) => `${BASE}/api/v2/sso/${connId}/login`,
 
-  /* ── Dashboard ─────────────────────────────────────── */
-  dashboard:      (siteId)  => get(`/api/dashboard${siteId ? `?site_id=${siteId}` : ""}`),
-  dashboardStats: (siteId)  => get(`/api/dashboard/stats${siteId ? `?site_id=${siteId}` : ""}`),
-  postureTrends:  ()        => get("/api/dashboard/posture-trends"),
+  // ── cases (Incidents → Cases) ────────────────────────────────────────────
+  cases: () => get("/api/v2/cases"),
+  case: (id) => get(`/api/v2/cases/${id}`),
+  caseTimeline: (id) => get(`/api/v2/cases/${id}/timeline`),
+  createCase: (body) => post("/api/v2/cases", body),
+  assignCase: (id, assignee) => post(`/api/v2/cases/${id}/assign`, { assignee }),
+  setCaseStatus: (id, status) => post(`/api/v2/cases/${id}/status`, { status }),
+  addCaseNote: (id, note) => post(`/api/v2/cases/${id}/notes`, { note }),
+  runPlaybook: (id, playbook) => post(`/api/v2/cases/${id}/run-playbook`, { playbook }),
 
-  /* ── Incidents ─────────────────────────────────────── */
-  incidents:      (siteId)  => get(`/api/incidents${siteId ? `?site_id=${siteId}` : ""}`),
-  incident:       (id)   => get(`/api/incidents/${id}`),
-  resolve:        (id)   => post(`/api/incidents/${id}/resolve`),
-  approveAction:  (id)   => post(`/api/incidents/actions/${id}/approve`),
-  reportUrl:      (id)   => `${API_BASE}/api/incidents/${id}/report.html`,
+  // ── ATT&CK ───────────────────────────────────────────────────────────────
+  attackTechniques: () => get("/api/v2/attack/techniques"),
+  attackCoverage: () => get("/api/v2/attack/coverage"),
+  attackReport: () => get("/api/v2/attack/report"),
 
-  /* ── Monitoring ────────────────────────────────────── */
-  monitoringHistory: (siteId)  => get(`/api/monitoring/history/${siteId || 1}`),
-  triggerCheck:      (siteId)  => post(`/api/monitoring/check/${siteId || 1}`),
-  crowdsec:          ()  => get("/api/monitoring/crowdsec"),
+  // ── Threat Intelligence ──────────────────────────────────────────────────
+  tipIndicators: () => get("/api/v2/tip/indicators"),
+  tipActors: () => get("/api/v2/tip/actors"),
+  tipPoll: () => post("/api/v2/tip/poll"),
 
-  /* ── Admin ─────────────────────────────────────────── */
-  sites:          ()              => get("/api/admin/sites"),
-  addSite:        (body)          => post("/api/admin/sites", body),
-  allowlist:      ()              => get("/api/admin/allowlist"),
-  addAllowlist:   (value, note)   => post(`/api/admin/allowlist?value=${encodeURIComponent(value)}&note=${encodeURIComponent(note || "")}`),
-  removeAllowlist:(id)            => del(`/api/admin/allowlist/${id}`),
-  honeypots:      ()              => get("/api/admin/honeypots"),
-  addHoneypot:    (path, note)    => post(`/api/admin/honeypots?path=${encodeURIComponent(path)}&note=${encodeURIComponent(note || "")}`),
-  removeHoneypot: (id)            => del(`/api/admin/honeypots/${id}`),
-  quarantine:     ()              => get("/api/admin/quarantine"),
-  config:         ()              => get("/api/admin/config"),
-  updateConfig:   (body)          => post("/api/admin/config", body),
-  advisor:        ()              => get("/api/admin/advisor"),
-  harden:         ()              => post("/api/admin/harden"),
-  threatFeed:     ()              => get("/api/admin/threat-feed"),
+  // ── Agent Fleet (Monitoring) ─────────────────────────────────────────────
+  agents: () => get("/api/v2/agents"),
+  agentManifest: () => get("/api/v2/agents/manifest"),
+  mintAgentToken: () => post("/api/v2/agents/tokens"),
+  revokeAgent: (id) => post(`/api/v2/agents/${id}/revoke`),
 
-  /* ── Admin: Backups ────────────────────────────────── */
-  backups:        ()              => get("/api/admin/backups"),
-  runBackup:      ()              => post("/api/admin/backups"),
-  restoreBackup:  (name)          => post(`/api/admin/backups/${encodeURIComponent(name)}/restore`),
-  deleteBackup:   (name)          => del(`/api/admin/backups/${encodeURIComponent(name)}`),
+  // ── Detections ───────────────────────────────────────────────────────────
+  sendFeedback: (body) => post("/api/v2/detections/feedback", body),
 
-  /* ── Admin: Simulator ──────────────────────────────── */
-  startSimulator: (mode)          => post(`/api/admin/simulator/start?mode=${mode}`),
-  stopSimulator:  ()              => post("/api/admin/simulator/stop"),
-  simulatorStatus:()              => get("/api/admin/simulator/status"),
+  // ── Copilot ──────────────────────────────────────────────────────────────
+  copilotAsk: (question) => post("/api/v2/copilot/ask", { question }),
+  copilotSummary: () => post("/api/v2/copilot/summary"),
 
-  /* ── Admin: Bug Hunter Scanner ─────────────────────── */
-  triggerScanner: (siteId)        => post(`/api/admin/scanner/trigger?site_id=${siteId}`),
-  scannerStatus:  ()              => get("/api/admin/scanner/status"),
-  vulnerabilities:()              => get("/api/admin/scanner/vulnerabilities"),
+  // ── Compliance / Audit ───────────────────────────────────────────────────
+  auditVerify: () => get("/api/v2/compliance/audit/verify"),
+  gdprExport: () => get("/api/v2/compliance/gdpr/export"),
+  runRetention: () => post("/api/v2/compliance/retention/run"),
+  validateBackup: () => post("/api/v2/compliance/backup/validate"),
 
-  /* ── Audit ─────────────────────────────────────────── */
-  auditLog:       ()              => get("/api/admin/audit-log"),
-
-  /* ── Health ────────────────────────────────────────── */
-  health:         ()              => get("/health"),
+  // ── health ───────────────────────────────────────────────────────────────
+  health: () => request("/health", { auth: false }),
 };

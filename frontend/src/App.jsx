@@ -1,289 +1,260 @@
+// AEGIS Enterprise — application shell.
+// Auth flow: Login → (MFA challenge if required) → tokens. SSO button + session-expired
+// screen. Authenticated shell has role-gated navigation, an organization switcher,
+// silent token refresh, and session recovery on reload. Every page reads /api/v2/*.
 import { useState, useEffect, useCallback } from "react";
-import { api } from "./api.js";
-import Dashboard from "./components/Dashboard.jsx";
-import Incidents, { IncidentDrawer } from "./components/Incidents.jsx";
-import Monitoring from "./components/Monitoring.jsx";
-import Admin from "./components/Admin.jsx";
-import AuditLog from "./components/AuditLog.jsx";
+import { api, ApiError } from "./api.js";
+import * as session from "./lib/auth.js";
 import { Icon } from "./components/icons.jsx";
-import { LiveDot, ToastProvider } from "./components/shared.jsx";
+import { ToastProvider, notify, LiveDot } from "./components/shared.jsx";
+import {
+  DashboardView, CasesView, AttackView, TipView, AgentsView,
+  DetectionsView, CopilotView, ComplianceView, AuditView, SettingsView,
+} from "./modules.jsx";
 
-/* ── Hash-based routing ──────────────────────────────────────────────── */
+/* ── routing ─────────────────────────────────────────────────────────────── */
 function useHashRoute() {
-  const [page, setPage] = useState(
-    window.location.hash.replace(/^#\/?/, "") || "dashboard"
-  );
+  const [page, setPage] = useState(() => window.location.hash.replace(/^#\/?/, "") || "dashboard");
   useEffect(() => {
-    function handler() {
-      setPage(window.location.hash.replace(/^#\/?/, "") || "dashboard");
-    }
-    window.addEventListener("hashchange", handler);
-    return () => window.removeEventListener("hashchange", handler);
+    const h = () => setPage(window.location.hash.replace(/^#\/?/, "") || "dashboard");
+    window.addEventListener("hashchange", h);
+    return () => window.removeEventListener("hashchange", h);
   }, []);
   return page;
 }
+const navigate = (p) => { window.location.hash = p; };
 
-function navigate(page) {
-  window.location.hash = page;
-}
+/* ── nav (each item gates on a minimum role) ─────────────────────────────── */
+const NAV = [
+  { key: "dashboard",  icon: "shield",       label: "Dashboard",    min: "read_only" },
+  { key: "cases",      icon: "alert",        label: "Cases",        min: "read_only" },
+  { key: "attack",     icon: "target",       label: "ATT&CK",       min: "read_only" },
+  { key: "tip",        icon: "radio",        label: "Threat Intel", min: "read_only" },
+  { key: "agents",     icon: "package",      label: "Agent Fleet",  min: "read_only" },
+  { key: "detections", icon: "target",       label: "Detections",   min: "analyst" },
+  { key: "copilot",    icon: "zap",          label: "Copilot",      min: "read_only" },
+  { key: "compliance", icon: "shield-check", label: "Compliance",   min: "read_only" },
+  { key: "audit",      icon: "clipboard",    label: "Audit Log",    min: "analyst" },
+  { key: "settings",   icon: "settings",     label: "Settings",     min: "read_only" },
+];
+const TITLES = Object.fromEntries(NAV.map((n) => [n.key, n.label]));
 
-/* ── Login ───────────────────────────────────────────────────────────── */
-function Login({ onLoginSuccess }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      await api.login(email, password);
-      onLoginSuccess();
-      window.location.hash = "#/dashboard";
-    } catch (err) {
-      setError("Invalid email or password");
-    }
-    setLoading(false);
-  }
-
+/* ════════════════════════ AUTH SCREENS ════════════════════════════════════ */
+function AuthFrame({ children, sub }) {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <div className="login-card__logo">
-          <span className="logo-icon"><Icon name="shield-check" /></span>
-          AEGIS
-        </div>
-        <div className="login-card__title">Sign in to the security console</div>
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {error && <div className="login-error">{error}</div>}
-          <div className="login-form-group">
-            <label className="login-label">Email address</label>
-            <input
-              type="email"
-              className="login-input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@aegis.internal"
-              autoComplete="username"
-              required
-            />
-          </div>
-          <div className="login-form-group">
-            <label className="login-label">Password</label>
-            <input
-              type="password"
-              className="login-input"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          <button type="submit" className="btn-primary" disabled={loading} style={{ marginTop: "6px", width: "100%" }}>
-            {loading ? "Authenticating…" : "Sign in"}
-          </button>
-        </form>
-        <div className="login-hint">
-          <b>Demo accounts</b>
-          <div>Admin — <code>admin@aegis.internal</code> / <code>admin123</code></div>
-          <div>Analyst — <code>analyst@aegis.internal</code> / <code>analyst123</code></div>
-          <div>Read-only — <code>readonly@aegis.internal</code> / <code>readonly123</code></div>
-        </div>
+        <div className="login-card__logo"><span className="logo-icon"><Icon name="shield-check" /></span> AEGIS</div>
+        <div className="login-card__title">{sub}</div>
+        {children}
       </div>
     </div>
   );
 }
 
-/* ── Navigation ──────────────────────────────────────────────────────── */
-const NAV = [
-  { key: "dashboard",  icon: "shield",    label: "Dashboard" },
-  { key: "incidents",  icon: "alert",     label: "Incidents" },
-  { key: "monitoring", icon: "activity",  label: "Monitoring" },
-  { key: "admin",      icon: "settings",  label: "Administration" },
-  { key: "audit",      icon: "clipboard", label: "Audit Log" },
-];
+function Login({ onAuthed }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [challenge, setChallenge] = useState(null);   // MFA challenge token
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
 
-const PAGE_TITLES = {
-  dashboard: "Dashboard",
-  incidents: "Incidents",
-  monitoring: "Monitoring",
-  admin: "Administration",
-  audit: "Audit Log",
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   MAIN APP
-   ═══════════════════════════════════════════════════════════════════════ */
-export default function App() {
-  const page = useHashRoute();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [incidentDrawerId, setIncidentDrawerId] = useState(null);
-  const [user, setUser] = useState(null);
-  const [loadingUser, setLoadingUser] = useState(true);
-  const [sites, setSites] = useState([]);
-  const [siteId, setSiteId] = useState(() => localStorage.getItem("aegis_site") || "");
-
-  const changeSite = useCallback((v) => {
-    setSiteId(v);
-    if (v) localStorage.setItem("aegis_site", v);
-    else localStorage.removeItem("aegis_site");
-  }, []);
-
-  const checkUser = useCallback(async () => {
-    const token = localStorage.getItem("aegis_token");
-    if (!token) {
-      setUser(null);
-      setLoadingUser(false);
-      if (window.location.hash !== "#/login") window.location.hash = "#/login";
-      return;
-    }
+  async function doLogin(e) {
+    e.preventDefault(); setErr(""); setBusy(true);
     try {
-      const data = await api.me();
-      setUser(data);
-      localStorage.setItem("aegis_role", data.role);
-    } catch (err) {
-      setUser(null);
-      localStorage.removeItem("aegis_token");
-      localStorage.removeItem("aegis_role");
-      window.location.hash = "#/login";
-    }
-    setLoadingUser(false);
-  }, []);
+      const r = await api.login(email, password);
+      if (r.mfa_required) { setChallenge(r.challenge); }
+      else { session.setTokens(r); onAuthed(); }
+    } catch (e2) {
+      setErr(e2 instanceof ApiError && e2.status === 401 ? "Invalid email or password." : (e2.message || "Login failed."));
+    } finally { setBusy(false); }
+  }
 
-  useEffect(() => { checkUser(); }, [checkUser, page]);
-  useEffect(() => { setSidebarOpen(false); }, [page]);
-  useEffect(() => {
-    if (!user) return;
-    api.sites().then((s) => setSites(Array.isArray(s) ? s : [])).catch(() => {});
-  }, [user]);
+  async function doMfa(e) {
+    e.preventDefault(); setErr(""); setBusy(true);
+    try { session.setTokens(await api.completeMfa(challenge, code)); onAuthed(); }
+    catch { setErr("Invalid or expired MFA code."); }
+    finally { setBusy(false); }
+  }
 
-  const openIncident = useCallback((id) => setIncidentDrawerId(id), []);
+  function sso() {
+    // SSO requires a configured IdP connection on the backend. With one, redirect:
+    const conn = window.prompt("Enter your SSO connection ID (configured by your admin):");
+    if (conn) window.location.href = api.ssoStartUrl(conn.trim());
+  }
 
-  if (loadingUser) {
+  if (challenge) {
     return (
-      <div className="dash-loading" style={{ height: "100vh" }}>
-        <div className="dash-loading__spinner" />
-        <div>Verifying credentials…</div>
-      </div>
+      <AuthFrame sub="Multi-factor authentication">
+        <form onSubmit={doMfa} className="auth-form">
+          {err && <div className="login-error">{err}</div>}
+          <label className="login-label">Authenticator code</label>
+          <input className="login-input" inputMode="numeric" autoFocus placeholder="123456"
+                 value={code} onChange={(e) => setCode(e.target.value)} required />
+          <button className="btn-primary" disabled={busy}>{busy ? "Verifying…" : "Verify"}</button>
+          <button type="button" className="link-btn" onClick={() => setChallenge(null)}>← Back to sign in</button>
+        </form>
+      </AuthFrame>
     );
   }
+  return (
+    <AuthFrame sub="Sign in to the enterprise console">
+      <form onSubmit={doLogin} className="auth-form">
+        {err && <div className="login-error">{err}</div>}
+        <label className="login-label">Email address</label>
+        <input className="login-input" type="email" autoComplete="username" placeholder="you@company.com"
+               value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <label className="login-label">Password</label>
+        <input className="login-input" type="password" autoComplete="current-password" placeholder="••••••••"
+               value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <button className="btn-primary" disabled={busy}>{busy ? "Authenticating…" : "Sign in"}</button>
+      </form>
+      <div className="auth-divider"><span>or</span></div>
+      <button className="btn-sso" onClick={sso}><Icon name="key" size={16} /> Sign in with SSO</button>
+    </AuthFrame>
+  );
+}
 
-  if (!user || page === "login") {
-    return <Login onLoginSuccess={checkUser} />;
+function SessionExpired({ onRelogin }) {
+  return (
+    <AuthFrame sub="Session expired">
+      <p className="muted" style={{ textAlign: "center" }}>Your session has ended for security. Please sign in again.</p>
+      <button className="btn-primary" onClick={onRelogin}>Return to sign in</button>
+    </AuthFrame>
+  );
+}
+
+/* ════════════════════════ ORG SWITCHER ════════════════════════════════════ */
+function OrgSwitcher({ identity, orgs, onSwitch }) {
+  if (!orgs || orgs.length === 0) return null;
+  async function change(e) {
+    const org = e.target.value;
+    if (org === identity.org) return;
+    try { session.setTokens(await api.switchOrg(org)); notify("Switched organization", "success"); onSwitch(); }
+    catch { /* toast shown */ }
   }
+  return (
+    <div className="org-switch" title="Active organization">
+      <Icon name="layers" size={15} />
+      <select value={identity.org} onChange={change}>
+        {orgs.map((o) => <option key={o.org_id} value={o.org_id}>{o.org_id.slice(0, 8)}… · {o.role}</option>)}
+      </select>
+    </div>
+  );
+}
+
+/* ════════════════════════ MAIN APP ════════════════════════════════════════ */
+export default function App() {
+  const page = useHashRoute();
+  const [authed, setAuthed] = useState(session.isAuthed());
+  const [recovering, setRecovering] = useState(session.canRecover());
+  const [expired, setExpired] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [orgs, setOrgs] = useState([]);
+  const [ident, setIdent] = useState(session.identity());
+
+  // session recovery on load (silent refresh from a persisted refresh token)
+  useEffect(() => {
+    if (session.isAuthed() || !session.canRecover()) { setRecovering(false); return; }
+    api.health().catch(() => {});                       // warm the free instance
+    session.scheduleRefresh();
+    // trigger an immediate refresh by hitting a lightweight authed endpoint
+    api.listOrgs().then((o) => { setOrgs(o); setAuthed(true); }).catch(() => session.sessionExpired())
+      .finally(() => setRecovering(false));
+  }, []);
+
+  // react to session changes / expiry
+  useEffect(() => session.on("expired", () => { setAuthed(false); setExpired(true); }), []);
+  useEffect(() => session.on("change", () => { setIdent(session.identity()); setAuthed(session.isAuthed()); }), []);
+  useEffect(() => { setSidebarOpen(false); }, [page]);
+
+  // load memberships once authed
+  useEffect(() => {
+    if (!authed) return;
+    setIdent(session.identity());
+    api.listOrgs().then(setOrgs).catch(() => {});
+  }, [authed]);
+
+  const onAuthed = useCallback(() => { setExpired(false); setAuthed(true); setIdent(session.identity()); navigate("dashboard"); }, []);
+  const logout = useCallback(async () => { await api.logout(); setAuthed(false); setExpired(false); }, []);
+
+  if (recovering) {
+    return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Restoring session…</div></div>;
+  }
+  if (expired) return <ToastProvider><SessionExpired onRelogin={() => { setExpired(false); }} /></ToastProvider>;
+  if (!authed) return <ToastProvider><Login onAuthed={onAuthed} /></ToastProvider>;
+
+  // role-gated nav + active page guard
+  const visibleNav = NAV.filter((n) => session.hasRole(n.min));
+  const current = NAV.find((n) => n.key === page) || NAV[0];
+  const allowed = session.hasRole(current.min);
 
   function renderPage() {
+    if (!allowed) return <div className="page-wrap"><div className="inline-note inline-note--warn">Your role ({ident.role}) doesn't have access to “{current.label}”.</div></div>;
+    const canAnalyst = session.hasRole("analyst");
+    const canAdmin = session.hasRole("admin");
     switch (page) {
-      case "incidents":  return <Incidents user={user} siteId={siteId} />;
-      case "monitoring": return <Monitoring user={user} siteId={siteId} sites={sites} />;
-      case "admin":      return <Admin user={user} />;
-      case "audit":      return <AuditLog user={user} />;
-      default:           return <Dashboard user={user} siteId={siteId} onOpenIncident={openIncident} />;
+      case "cases":      return <CasesView canWrite={canAnalyst} />;
+      case "attack":     return <AttackView />;
+      case "tip":        return <TipView canWrite={canAnalyst} />;
+      case "agents":     return <AgentsView canWrite={canAdmin} />;
+      case "detections": return <DetectionsView />;
+      case "copilot":    return <CopilotView />;
+      case "compliance": return <ComplianceView canAdmin={canAdmin} />;
+      case "audit":      return <AuditView />;
+      case "settings":   return <SettingsView identity={ident} orgs={orgs} />;
+      default:           return <DashboardView />;
     }
   }
 
-  const initial = (user.email || "?").charAt(0).toUpperCase();
+  const initial = (ident.email || "?").charAt(0).toUpperCase();
 
   return (
     <ToastProvider>
       <div className="app-shell">
-        <button
-          className={`hamburger ${sidebarOpen ? "open" : ""}`}
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          aria-label="Toggle navigation"
-        >
-          <span /><span /><span />
-        </button>
-
+        <button className={`hamburger ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle navigation"><span /><span /><span /></button>
         {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
-        {/* Sidebar */}
         <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
           <div className="sidebar__brand" onClick={() => navigate("dashboard")}>
             <span className="logo-icon"><Icon name="shield-check" /></span>
-            <div>
-              <div className="logo-text">AEGIS</div>
-              <div className="sidebar__tagline">Security Console</div>
-            </div>
+            <div><div className="logo-text">AEGIS</div><div className="sidebar__tagline">Enterprise Console</div></div>
           </div>
-
           <nav className="sidebar__nav">
-            <div className="nav-section-label">Operations</div>
-            {NAV.map((item) => (
-              <button
-                key={item.key}
-                className={`nav-item ${page === item.key ? "nav-item--active" : ""}`}
-                onClick={() => navigate(item.key)}
-              >
+            <div className="nav-section-label">Security Operations</div>
+            {visibleNav.map((item) => (
+              <button key={item.key} aria-current={page === item.key ? "page" : undefined} className={`nav-item ${page === item.key ? "nav-item--active" : ""}`} onClick={() => navigate(item.key)}>
                 {page === item.key && <span className="nav-item__indicator" />}
                 <span className="nav-item__icon"><Icon name={item.icon} size={17} /></span>
                 <span className="nav-item__label">{item.label}</span>
               </button>
             ))}
           </nav>
-
           <div className="sidebar__footer">
             <div className="user-chip">
               <div className="user-chip__avatar">{initial}</div>
               <div className="user-chip__meta">
-                <div className="user-chip__email">{user.email}</div>
-                <div className="user-chip__role">{user.role.replace("_", " ")}</div>
+                <div className="user-chip__email">{ident.email}</div>
+                <div className="user-chip__role">{ident.role.replace("_", " ")}</div>
               </div>
-              <button
-                className="user-chip__logout"
-                title="Sign out"
-                onClick={() => { api.logout(); checkUser(); }}
-              >
-                <Icon name="logout" size={15} />
-              </button>
+              <button className="user-chip__logout" title="Sign out" onClick={logout}><Icon name="logout" size={15} /></button>
             </div>
-            <div className="sidebar__version">
-              <span>AEGIS v1.2</span>
-              <span className="sidebar__status"><span className="sidebar__status-dot" /> Active</span>
-            </div>
+            <div className="sidebar__version"><span>AEGIS Enterprise</span><span className="sidebar__status"><span className="sidebar__status-dot" /> Live</span></div>
           </div>
         </aside>
 
-        {/* Main */}
         <main className="main-content">
           <header className="topbar">
-            <div>
-              <div className="topbar__title">{PAGE_TITLES[page] || "Dashboard"}</div>
-            </div>
+            <div className="topbar__title">{TITLES[page] || "Dashboard"}</div>
             <div className="topbar__right">
-              {sites.length > 0 && (
-                <select
-                  className="site-select"
-                  value={siteId}
-                  onChange={(e) => changeSite(e.target.value)}
-                  title="Filter by site"
-                >
-                  <option value="">All sites</option>
-                  {sites.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name || s.url}</option>
-                  ))}
-                </select>
-              )}
-              <LiveDot />
-              <span className="topbar__crumb">Live · auto-refresh</span>
+              <OrgSwitcher identity={ident} orgs={orgs} onSwitch={() => setIdent(session.identity())} />
+              <span className="role-pill">{ident.role}</span>
+              <LiveDot /><span className="topbar__crumb">Live</span>
             </div>
           </header>
-          <div className="page-body">
-            {renderPage()}
-          </div>
+          <div className="page-body">{renderPage()}</div>
         </main>
-
-        {incidentDrawerId && (
-          <IncidentDrawer
-            id={incidentDrawerId}
-            onClose={() => setIncidentDrawerId(null)}
-            onChanged={() => {}}
-            user={user}
-          />
-        )}
       </div>
     </ToastProvider>
   );

@@ -25,7 +25,7 @@ from .tenancy import tenant_session
 
 router = APIRouter(prefix="/api/v2/sso", tags=["sso"])
 SENTINEL = "00000000-0000-0000-0000-000000000000"
-_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0)
 FRONTEND_CALLBACK = "/sso/callback"   # SPA route that consumes the tokens
 
 

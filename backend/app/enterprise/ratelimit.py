@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request, status
 
 from .settings import get_settings
 
-_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0)
 
 # Atomic sliding-window counter: returns the current count within the window.
 _LUA = """

@@ -20,7 +20,7 @@ from .models_p2 import SiemConnection
 from .settings import get_settings
 from .tenancy import tenant_session
 
-_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+_r = redis.Redis.from_url(get_settings().redis_url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0)
 QUEUE = "siem:queue"
 
 
