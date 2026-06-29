@@ -12,9 +12,15 @@ from sqlalchemy.orm import sessionmaker
 
 from .settings import get_settings
 
-# Dedicated engine using the RLS-bound app role (NOT the migration/owner role).
-_engine = create_engine(get_settings().database_url, pool_pre_ping=True, pool_size=10,
-                        max_overflow=20, future=True)
+def _build_engine():
+    url = get_settings().database_url
+    if "sqlite" in url:
+        # SQLite doesn't support pool_size/max_overflow; needs check_same_thread=False
+        # so FastAPI's thread pool can reuse connections across async tasks.
+        return create_engine(url, connect_args={"check_same_thread": False}, future=True)
+    return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20, future=True)
+
+_engine = _build_engine()
 _Session = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False, future=True)
 
 

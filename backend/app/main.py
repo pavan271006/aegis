@@ -60,9 +60,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
-)
+# Enterprise mode mounts its own CORS middleware (explicit allowlist, credentials=True).
+# Only add the wildcard middleware in non-enterprise / lite mode.
+if not os.getenv("AEGIS_ENTERPRISE") == "1":
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    )
 
 import os as _os
 if _os.getenv("AEGIS_ENTERPRISE") == "1":

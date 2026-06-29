@@ -47,12 +47,13 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def issue_refresh(db: Session, *, user_id: int, org_id: str,
+def issue_refresh(db: Session, *, user_id: int, org_id,
                   ip: str = "", ua: str = "", parent_id=None) -> str:
     s = get_settings()
     token = secrets.token_urlsafe(48)
+    _org_id = uuid.UUID(str(org_id))   # normalise to uuid.UUID for Uuid(as_uuid=True) bind processor
     row = RefreshSession(
-        user_id=user_id, org_id=org_id, token_hash=_hash(token),
+        user_id=user_id, org_id=_org_id, token_hash=_hash(token),
         parent_id=parent_id, user_agent=ua[:300], ip=ip or None,
         expires_at=dt.datetime.now(dt.timezone.utc)
         + dt.timedelta(seconds=s.refresh_ttl_seconds),

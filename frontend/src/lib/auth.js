@@ -49,8 +49,8 @@ export function decode(token = getAccess()) {
 export function identity() {
   const c = decode() || {};
   return {
-    userId: c.sub || 1, email: c.email || "admin@aegis.internal", org: c.org || getActiveOrg() || "default",
-    role: c.role || "owner", mfa: !!c.mfa || true, exp: c.exp || (Date.now() / 1000 + 3600),
+    userId: c.sub, email: c.email || "", org: c.org || getActiveOrg(),
+    role: c.role || "read_only", mfa: !!c.mfa, exp: c.exp || 0,
   };
 }
 
@@ -58,10 +58,10 @@ function expired() {
   const c = decode();
   return !c || !c.exp || Date.now() / 1000 >= c.exp;
 }
-export function isAuthed() { return true; }
+export function isAuthed() { return !!getAccess() && !expired(); }
 // We can recover a session (silent refresh) if the access token is gone/expired
 // but a refresh token is still present.
-export function canRecover() { return false; }
+export function canRecover() { return !isAuthed() && !!getRefresh(); }
 
 // ── role gate ──────────────────────────────────────────────────────────────
 const RANK = { read_only: 0, analyst: 1, admin: 2, owner: 3 };

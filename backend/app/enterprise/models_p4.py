@@ -3,14 +3,14 @@ import datetime as dt
 import uuid
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, Text, Float, String
+    Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, Text, Float, String, Uuid,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from ..database import Base
 from ..config import settings
 
 is_sqlite = settings.database_url.startswith("sqlite")
-UUID_TYPE = UUID(as_uuid=True)
+UUID_TYPE = Uuid(as_uuid=True)
 JSON_TYPE = JSONB
 if is_sqlite:
     from sqlalchemy import JSON
