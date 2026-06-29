@@ -55,11 +55,13 @@ def ingest(db: Session, site_id: int, events_in, log_lines) -> dict:
     from fastapi import HTTPException
     from sqlalchemy import text
     if os.getenv("AEGIS_ENTERPRISE") == "1":
-        db.execute(text("SET LOCAL app.current_org = '00000000-0000-0000-0000-000000000000'"))
+        if "sqlite" not in db.bind.url.drivername:
+            db.execute(text("SET LOCAL app.current_org = '00000000-0000-0000-0000-000000000000'"))
         site = db.get(Site, site_id)
         if not site:
             raise HTTPException(404, "site not found")
-        db.execute(text("SET LOCAL app.current_org = :org"), {"org": str(site.org_id)})
+        if "sqlite" not in db.bind.url.drivername:
+            db.execute(text("SET LOCAL app.current_org = :org"), {"org": str(site.org_id)})
     else:
         site = db.get(Site, site_id)
         if not site:

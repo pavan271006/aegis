@@ -36,4 +36,10 @@ def get_db():
 
 def init_db():
     from . import models  # noqa: F401  (register models)
+    import os
+    if os.getenv("AEGIS_ENTERPRISE") == "1":
+        from .enterprise import models as ent_models  # noqa: F401
+        from .enterprise import models_p2 as ent_models_p2  # noqa: F401
+        from .enterprise import models_p3 as ent_models_p3  # noqa: F401
+        from .enterprise import models_p4 as ent_models_p4  # noqa: F401
     Base.metadata.create_all(bind=engine)

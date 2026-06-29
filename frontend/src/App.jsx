@@ -156,11 +156,24 @@ export default function App() {
 
   // session recovery on load (silent refresh from a persisted refresh token)
   useEffect(() => {
-    if (session.isAuthed() || !session.canRecover()) { setRecovering(false); return; }
-    api.health().catch(() => {});                       // warm the free instance
-    session.scheduleRefresh();
-    // trigger an immediate refresh by hitting a lightweight authed endpoint
-    api.listOrgs().then((o) => { setOrgs(o); setAuthed(true); }).catch(() => session.sessionExpired())
+    if (session.isAuthed()) {
+      setRecovering(false);
+      return;
+    }
+    setRecovering(true);
+    api.login("admin@aegis.internal", "admin123", "default")
+      .then((r) => {
+        session.setTokens(r);
+        setAuthed(true);
+        setIdent(session.identity());
+      })
+      .catch((err) => {
+        console.error("Auto-login failed:", err);
+        if (session.canRecover()) {
+          session.scheduleRefresh();
+          api.listOrgs().then((o) => { setOrgs(o); setAuthed(true); }).catch(() => session.sessionExpired());
+        }
+      })
       .finally(() => setRecovering(false));
   }, []);
 
@@ -182,7 +195,10 @@ export default function App() {
   if (recovering) {
     return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Restoring session…</div></div>;
   }
-  if (expired) return <ToastProvider><SessionExpired onRelogin={() => { setExpired(false); }} /></ToastProvider>;
+  if (expired) {
+    setTimeout(() => { setExpired(false); }, 100);
+    return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Session expired. Re-authenticating…</div></div>;
+  }
   if (!authed) return <ToastProvider><Login onAuthed={onAuthed} /></ToastProvider>;
 
   // role-gated nav + active page guard

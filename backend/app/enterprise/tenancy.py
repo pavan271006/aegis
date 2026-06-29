@@ -24,7 +24,8 @@ def tenant_session(org_id: str):
     session = _Session()
     try:
         # SET LOCAL is transaction-scoped; bind the org for this unit of work.
-        session.execute(text("SET LOCAL app.current_org = :org"), {"org": str(org_id)})
+        if "sqlite" not in _engine.url.drivername:
+            session.execute(text("SET LOCAL app.current_org = :org"), {"org": str(org_id)})
         yield session
         session.commit()
     except Exception:
@@ -40,7 +41,8 @@ def system_session():
     Use sparingly and audit every call site."""
     session = _Session()
     try:
-        session.execute(text("SET LOCAL app.current_org = '00000000-0000-0000-0000-000000000000'"))
+        if "sqlite" not in _engine.url.drivername:
+            session.execute(text("SET LOCAL app.current_org = '00000000-0000-0000-0000-000000000000'"))
         # System role must be explicitly granted BYPASSRLS for this to see all rows;
         # otherwise it operates on a sentinel empty tenant (fail-closed by default).
         yield session

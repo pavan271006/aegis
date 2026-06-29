@@ -77,9 +77,11 @@ def list_techniques(user: Principal = Depends(require("read_only"))):
 @router.get("/coverage")
 def coverage(days: int = 30, user: Principal = Depends(require("read_only"))):
     """Heatmap: per technique, how many incidents in the window mapped to it."""
-    incs = user.db.execute(text(
-        "SELECT threat_types FROM incidents WHERE created_at >= now() - (:d || ' days')::interval"),
-        {"d": days}).all()
+    if "sqlite" in user.db.bind.url.drivername:
+        query = "SELECT threat_types FROM incidents WHERE created_at >= datetime('now', '-' || :d || ' days')"
+    else:
+        query = "SELECT threat_types FROM incidents WHERE created_at >= now() - (:d || ' days')::interval"
+    incs = user.db.execute(text(query), {"d": days}).all()
     counts: dict[str, int] = {}
     for (types,) in incs:
         for t in techniques_for(types or []):

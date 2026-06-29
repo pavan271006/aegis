@@ -16,7 +16,7 @@ from pydantic import BaseModel, EmailStr
 from ..models import User
 from . import keys, mfa, passwords, tokens
 from .deps import Principal, require
-from .models import Membership
+from .models import Membership, Organization
 from .ratelimit import auth_throttle, limit
 from .settings import get_settings
 from .tenancy import tenant_session
@@ -41,10 +41,20 @@ class RefreshIn(BaseModel):
 
 
 def _default_org(db, user_id: int, requested: str | None) -> Membership | None:
+    import uuid
     q = db.query(Membership).filter(Membership.user_id == user_id,
                                     Membership.status == "active")
     if requested:
-        return q.filter(Membership.org_id == requested).first()
+        # Check if requested is a slug (e.g. "default")
+        org = db.query(Organization).filter(Organization.slug == requested).first()
+        if org:
+            return q.filter(Membership.org_id == org.id).first()
+        # Fallback to direct org_id query if it looks like a valid UUID string
+        try:
+            val = uuid.UUID(requested)
+            return q.filter(Membership.org_id == val).first()
+        except ValueError:
+            return None
     return q.order_by(Membership.created_at.asc()).first()
 
 

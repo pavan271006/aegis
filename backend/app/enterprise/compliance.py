@@ -53,7 +53,14 @@ def verify_chain(user: Principal = Depends(require("admin"))):
         "SELECT id,ts,actor,action,details,prev_hash,entry_hash FROM audit_log ORDER BY ts,id")).all()
     prev = ""
     for r in rows:
-        canonical = json.dumps({"ts": r[1].isoformat(), "actor": r[2], "action": r[3],
+        ts_val = r[1]
+        if isinstance(ts_val, str):
+            import dateutil.parser
+            ts_str = dateutil.parser.parse(ts_val).isoformat()
+        else:
+            ts_str = ts_val.isoformat()
+            
+        canonical = json.dumps({"ts": ts_str, "actor": r[2], "action": r[3],
                                 "details": r[4]}, sort_keys=True, separators=(",", ":"))
         expect = hashlib.sha256((prev + canonical).encode()).hexdigest()
         if r[5] != prev or r[6] != expect:
