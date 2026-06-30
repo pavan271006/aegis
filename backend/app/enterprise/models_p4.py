@@ -10,7 +10,7 @@ from ..database import Base
 from ..config import settings
 
 is_sqlite = settings.database_url.startswith("sqlite")
-UUID_TYPE = Uuid(as_uuid=True)
+UUID_TYPE = Uuid(as_uuid=False)
 JSON_TYPE = JSONB
 if is_sqlite:
     from sqlalchemy import JSON
@@ -22,7 +22,7 @@ else:
     ARRAY_TEXT_TYPE = ARRAY(Text)
 
 def _uuid():
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 def utcnow():
     return dt.datetime.now(dt.timezone.utc)

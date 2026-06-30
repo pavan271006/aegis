@@ -4,6 +4,7 @@ investigation notes, an append-only timeline, and a declarative playbook engine.
 State changes emit a `case.*` event to the SIEM forwarder and a timeline entry,
 so the SOC's external tooling stays in sync and the case is audit-defensible."""
 import datetime as dt
+import uuid as _uuid_mod
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -59,6 +60,14 @@ def create_case(body: CaseIn, user: Principal = Depends(require("analyst"))):
     if body.from_incident:
         db.add(CaseIncident(case_id=case.id, incident_id=body.from_incident, org_id=user.org_id))
     return _case_dto(case)
+
+
+@router.get("/stats")
+def case_stats(user: Principal = Depends(require("read_only"))):
+    from sqlalchemy import func
+    rows = user.db.query(Case.status, func.count(Case.id)).group_by(Case.status).all()
+    return {"by_status": {s: c for s, c in rows},
+            "total": sum(c for _, c in rows)}
 
 
 @router.get("")
@@ -145,6 +154,10 @@ def add_note(case_id: str, body: NoteIn, user: Principal = Depends(require("anal
 @router.post("/{case_id}/run-playbook")
 def run_playbook(case_id: str, playbook_id: str, user: Principal = Depends(require("analyst"))):
     case = _get(user.db, case_id)
+    try:
+        _uuid_mod.UUID(playbook_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "playbook not found")
     pb = user.db.get(Playbook, playbook_id)
     if not pb or not pb.enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "playbook not found")
@@ -221,6 +234,10 @@ def run_escalations(db: Session) -> int:
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 def _get(db: Session, case_id: str) -> Case:
+    try:
+        _uuid_mod.UUID(case_id)        # validate format before hitting DB
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "case not found")
     case = db.get(Case, case_id)
     if not case:                       # RLS already prevents cross-tenant reads
         raise HTTPException(status.HTTP_404_NOT_FOUND, "case not found")

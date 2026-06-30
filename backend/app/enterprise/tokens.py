@@ -51,7 +51,7 @@ def issue_refresh(db: Session, *, user_id: int, org_id,
                   ip: str = "", ua: str = "", parent_id=None) -> str:
     s = get_settings()
     token = secrets.token_urlsafe(48)
-    _org_id = uuid.UUID(str(org_id))   # normalise to uuid.UUID for Uuid(as_uuid=True) bind processor
+    _org_id = str(org_id)   # normalise to str for Uuid(as_uuid=False) storage
     row = RefreshSession(
         user_id=user_id, org_id=_org_id, token_hash=_hash(token),
         parent_id=parent_id, user_agent=ua[:300], ip=ip or None,
@@ -68,7 +68,12 @@ def rotate_refresh(db: Session, token: str, *, ip: str = "", ua: str = ""):
     the whole chain (token-theft response)."""
     now = dt.datetime.now(dt.timezone.utc)
     row = db.query(RefreshSession).filter(RefreshSession.token_hash == _hash(token)).first()
-    if row is None or row.expires_at < now:
+    if row is None:
+        return None
+    expires = row.expires_at
+    if expires.tzinfo is None:          # SQLite returns naive UTC datetimes
+        expires = expires.replace(tzinfo=dt.timezone.utc)
+    if expires < now:
         return None
     if row.revoked_at is not None:
         # Reuse of a rotated/revoked token => compromise. Kill the user's chain.

@@ -51,8 +51,8 @@ def _default_org(db, user_id: int, requested: str | None) -> Membership | None:
             return q.filter(Membership.org_id == org.id).first()
         # Fallback to direct org_id query if it looks like a valid UUID string
         try:
-            val = uuid.UUID(requested)
-            return q.filter(Membership.org_id == val).first()
+            # as_uuid=False: pass normalised string, not uuid.UUID object
+            return q.filter(Membership.org_id == str(uuid.UUID(requested))).first()
         except ValueError:
             return None
     return q.order_by(Membership.created_at.asc()).first()
