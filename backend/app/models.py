@@ -3,18 +3,20 @@ and PostgreSQL (prod). The canonical Postgres DDL is in db/init.sql."""
 import datetime as dt
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text,
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Uuid,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from .database import Base
 from .config import settings
 
 def org_id_column():
+    # as_uuid=False stores org_id as a plain string (no uuid.UUID bind processor that
+    # calls .hex on the value) — portable across SQLite and Postgres, and consistent
+    # with the enterprise models (see enterprise/models*.py UUID_TYPE).
     if settings.database_url.startswith("sqlite"):
-        return Column(UUID(as_uuid=True), nullable=True)
-    return Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+        return Column(Uuid(as_uuid=False), nullable=True)
+    return Column(Uuid(as_uuid=False), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 
 def utcnow():

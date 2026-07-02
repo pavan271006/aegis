@@ -137,10 +137,20 @@ def search_indicators(type: str | None = None, value: str | None = None,
         sql += " AND value LIKE :v"; params["v"] = f"%{value}%"
     rows = user.db.execute(text(sql + " ORDER BY confidence DESC LIMIT 200"), params).all()
     return [{"type": r[0], "value": r[1], "confidence": r[2], "source": r[3],
-             "valid_until": r[4].isoformat() if r[4] else None} for r in rows]
+             # SQLite returns DateTime columns as strings; Postgres as datetimes.
+             "valid_until": r[4].isoformat() if hasattr(r[4], "isoformat") else (r[4] or None)}
+            for r in rows]
 
 
 @router.get("/actors")
 def actors(user: Principal = Depends(require("read_only"))):
     rows = user.db.execute(text("SELECT name,aliases,description,source FROM threat_actors LIMIT 200")).all()
-    return [{"name": r[0], "aliases": list(r[1] or []), "description": r[2], "source": r[3]} for r in rows]
+    def _aliases(v):
+        if isinstance(v, str):              # SQLite returns JSON columns as strings
+            import json as _j
+            try:
+                return list(_j.loads(v) or [])
+            except (ValueError, TypeError):
+                return []
+        return list(v or [])
+    return [{"name": r[0], "aliases": _aliases(r[1]), "description": r[2], "source": r[3]} for r in rows]
