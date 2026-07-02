@@ -149,6 +149,8 @@ export default function App() {
   const page = useHashRoute();
   const [authed, setAuthed] = useState(session.isAuthed());
   const [recovering, setRecovering] = useState(session.canRecover());
+  // DEV single-site: try a credential-free owner session on first load.
+  const [autoTrying, setAutoTrying] = useState(!session.isAuthed() && !session.canRecover());
   const [expired, setExpired] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [orgs, setOrgs] = useState([]);
@@ -156,25 +158,23 @@ export default function App() {
 
   // session recovery on load (silent refresh from a persisted refresh token)
   useEffect(() => {
-    if (session.isAuthed()) {
-      setRecovering(false);
-      return;
-    }
-    setRecovering(true);
-    api.login("admin@aegis.internal", "admin123", "default")
-      .then((r) => {
-        session.setTokens(r);
-        setAuthed(true);
-        setIdent(session.identity());
-      })
-      .catch((err) => {
-        console.error("Auto-login failed:", err);
-        if (session.canRecover()) {
-          session.scheduleRefresh();
-          api.listOrgs().then((o) => { setOrgs(o); setAuthed(true); }).catch(() => session.sessionExpired());
-        }
-      })
+    if (session.isAuthed() || !session.canRecover()) { setRecovering(false); return; }
+    api.health().catch(() => {});                       // warm the free instance
+    session.scheduleRefresh();
+    // trigger an immediate refresh by hitting a lightweight authed endpoint
+    api.listOrgs().then((o) => { setOrgs(o); setAuthed(true); }).catch(() => session.sessionExpired())
       .finally(() => setRecovering(false));
+  }, []);
+
+  // DEV single-site auto-login: no stored session → mint a credential-free owner
+  // session via /api/v2/auth/dev-login. If the endpoint is disabled (prod), this
+  // 404s and we fall back to the normal Login screen.
+  useEffect(() => {
+    if (session.isAuthed() || session.canRecover()) { setAutoTrying(false); return; }
+    api.devLogin()
+      .then((r) => { session.setTokens(r); setAuthed(true); setIdent(session.identity()); })
+      .catch(() => { /* dev-login off → show Login */ })
+      .finally(() => setAutoTrying(false));
   }, []);
 
   // react to session changes / expiry
@@ -192,13 +192,10 @@ export default function App() {
   const onAuthed = useCallback(() => { setExpired(false); setAuthed(true); setIdent(session.identity()); navigate("dashboard"); }, []);
   const logout = useCallback(async () => { await api.logout(); setAuthed(false); setExpired(false); }, []);
 
-  if (recovering) {
-    return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Restoring session…</div></div>;
+  if (recovering || autoTrying) {
+    return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Starting AEGIS…</div></div>;
   }
-  if (expired) {
-    setTimeout(() => { setExpired(false); }, 100);
-    return <div className="dash-loading" style={{ height: "100vh" }}><div className="dash-loading__spinner" /><div>Session expired. Re-authenticating…</div></div>;
-  }
+  if (expired) return <ToastProvider><SessionExpired onRelogin={() => { setExpired(false); }} /></ToastProvider>;
   if (!authed) return <ToastProvider><Login onAuthed={onAuthed} /></ToastProvider>;
 
   // role-gated nav + active page guard

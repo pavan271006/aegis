@@ -8,6 +8,7 @@ Flow:  POST /login  -> (mfa_required ? challenge : tokens)
        MFA enrollment + JWKS.
 """
 import datetime as dt
+import os
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -51,8 +52,8 @@ def _default_org(db, user_id: int, requested: str | None) -> Membership | None:
             return q.filter(Membership.org_id == org.id).first()
         # Fallback to direct org_id query if it looks like a valid UUID string
         try:
-            val = uuid.UUID(requested)
-            return q.filter(Membership.org_id == val).first()
+            # as_uuid=False: pass normalised string, not uuid.UUID object
+            return q.filter(Membership.org_id == str(uuid.UUID(requested))).first()
         except ValueError:
             return None
     return q.order_by(Membership.created_at.asc()).first()
@@ -109,6 +110,32 @@ def login(body: LoginIn, request: Request):
         if user.mfa_enabled or mfa.required_for(m.role):
             return {"mfa_required": True, "challenge": _mfa_challenge(db, user, m)}
         return _issue_pair(db, user, m, mfa_ok=False, request=request)
+
+
+def mint_dev_session(request: Request | None = None) -> dict | None:
+    """DEV ONLY — return a full owner token pair for the first seeded active user
+    when AEGIS_DEV_NOAUTH=1, else None. Used by /dev-login and by the server-side
+    token injection that makes the local console authed on first paint."""
+    if os.getenv("AEGIS_DEV_NOAUTH") != "1":
+        return None
+    with tenant_session(SENTINEL) as db:
+        user = (db.query(User).filter(User.is_active.is_(True))
+                .order_by(User.id.asc()).first())
+        if not user:
+            return None
+        m = _default_org(db, user.id, None)
+        if not m:
+            return None
+        return _issue_pair(db, user, m, mfa_ok=True, request=request)
+
+
+@router.post("/dev-login")
+def dev_login(request: Request):
+    """DEV ONLY — no credentials. Returns 404 when AEGIS_DEV_NOAUTH is off."""
+    tokens = mint_dev_session(request)
+    if not tokens:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return tokens
 
 
 @router.post("/mfa", dependencies=[Depends(limit(20, 60))])

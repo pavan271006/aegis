@@ -90,7 +90,10 @@ def enroll(body: EnrollIn):
     with tenant_session(org_id) as db:
         tok = db.get(AgentEnrollmentToken, tok.id)
         now = dt.datetime.now(dt.timezone.utc)
-        if tok.expires_at < now or tok.uses >= tok.max_uses:
+        exp = tok.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=dt.timezone.utc)
+        if exp < now or tok.uses >= tok.max_uses:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "enrollment token exhausted/expired")
         ca_cert, ca_key = get_or_create_ca(db, org_id)
 
@@ -126,9 +129,10 @@ def _find_token(db: Session, token_hash: str):
     # Enrollment tokens are RLS-scoped; resolve org via a BYPASSRLS system path in
     # prod. For portability we scan by hash using a raw, unscoped lookup.
     from sqlalchemy import text
+    _now = dt.datetime.now(dt.timezone.utc)
     row = db.execute(text("SELECT id, org_id FROM agent_enrollment_tokens "
-                          "WHERE token_hash=:h AND uses < max_uses AND expires_at > now()"),
-                     {"h": token_hash}).first()
+                          "WHERE token_hash=:h AND uses < max_uses AND expires_at > :now"),
+                     {"h": token_hash, "now": _now}).first()
     if not row:
         return None
     class _T:  # lightweight carrier
@@ -184,10 +188,16 @@ def heartbeat(body: Heartbeat, principal: AgentPrincipal = Depends(agent_identit
 def list_fleet(user: Principal = Depends(require("analyst"))):
     rows = user.db.query(Agent).order_by(Agent.last_seen_at.desc().nullslast()).all()
     now = dt.datetime.now(dt.timezone.utc)
+    def _stale(ts):
+        if not ts:
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=dt.timezone.utc)
+        return (now - ts).total_seconds() > 900
     return [{"id": str(a.id), "name": a.name, "hostname": a.hostname, "status": a.status,
              "version": a.version, "channel": a.channel,
              "last_seen": a.last_seen_at.isoformat() if a.last_seen_at else None,
-             "stale": bool(a.last_seen_at and (now - a.last_seen_at).total_seconds() > 900),
+             "stale": _stale(a.last_seen_at),
              "health": a.health} for a in rows]
 
 

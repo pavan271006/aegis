@@ -2,15 +2,15 @@
 import datetime as dt
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, LargeBinary, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, LargeBinary, Text, Uuid
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
 from ..database import Base
 from ..config import settings
 
 is_sqlite = settings.database_url.startswith("sqlite")
-UUID_TYPE = UUID(as_uuid=True)
+UUID_TYPE = Uuid(as_uuid=False)
 JSON_TYPE = JSONB
 if is_sqlite:
     from sqlalchemy import JSON
@@ -21,7 +21,7 @@ else:
 
 
 def _uuid():
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 
 def utcnow():

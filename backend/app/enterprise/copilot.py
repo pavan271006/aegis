@@ -61,11 +61,13 @@ def _guard_output(text_out: str) -> str:
 
 # ── retrieval (tenant-scoped) ──────────────────────────────────────────────
 def _recent_incidents(db, days: int, like: str | None = None, limit: int = 25):
+    import datetime as _dt
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)
     sql = ("SELECT id, source_ip, severity, status, threat_types, created_at, report "
-           "FROM incidents WHERE created_at >= now() - (:d||' days')::interval")
-    params = {"d": days}
+           "FROM incidents WHERE created_at >= :cutoff")
+    params: dict = {"cutoff": cutoff}
     if like:
-        sql += " AND (source_ip ILIKE :q OR threat_types::text ILIKE :q)"
+        sql += " AND (source_ip LIKE :q OR CAST(threat_types AS TEXT) LIKE :q)"
         params["q"] = f"%{like}%"
     sql += " ORDER BY created_at DESC LIMIT :lim"
     params["lim"] = limit

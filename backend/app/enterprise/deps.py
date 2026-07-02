@@ -33,9 +33,7 @@ class Principal:
 
 
 def _decode(creds: HTTPAuthorizationCredentials | None) -> dict:
-    print("Incoming credentials:", creds)
     if not creds or creds.scheme.lower() != "bearer":
-        print("Missing or non-bearer scheme!")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token",
                             headers={"WWW-Authenticate": "Bearer"})
     # Decode needs a DB session only to look up the signing key; use a short one.
@@ -43,7 +41,6 @@ def _decode(creds: HTTPAuthorizationCredentials | None) -> dict:
         try:
             return tokens.verify_access(s, creds.credentials)
         except jwt.PyJWTError as e:
-            print("JWT decode failed error:", str(e))
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid or expired token: {str(e)}",
                                 headers={"WWW-Authenticate": "Bearer"})
 
@@ -53,20 +50,17 @@ def require(min_role: str = "read_only", mfa_required: bool = False):
     def dependency(
         creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> Iterator[Principal]:
-        with tenant_session("00000000-0000-0000-0000-000000000000") as db:
-            from app.models import User
-            from app.enterprise.models import Organization, Membership
-            user = db.query(User).filter(User.email == "admin@aegis.internal").first()
-            org = db.query(Organization).first()
-            # Default fallback if seeding is not done yet
-            user_id = user.id if user else 1
-            email = user.email if user else "admin@aegis.internal"
-            org_id = str(org.id) if org else "f99e4940-9995-4181-85c9-615ece4afa9b"
-            role = "owner"
-            
-        with tenant_session(org_id) as db_scoped:
+        claims = _decode(creds)
+        role = claims.get("role", "read_only")
+        if _ROLE_RANK.get(role, -1) < _ROLE_RANK.get(min_role, 99):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                f"requires role >= {min_role}")
+        if mfa_required and not claims.get("mfa", False):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA required")
+        org_id = claims["org"]
+        with tenant_session(org_id) as db:
             yield Principal(
-                user_id=user_id, email=email,
-                org_id=org_id, role=role, mfa=True, db=db_scoped,
+                user_id=int(claims["sub"]), email=claims.get("email", ""),
+                org_id=org_id, role=role, mfa=claims.get("mfa", False), db=db,
             )
     return dependency

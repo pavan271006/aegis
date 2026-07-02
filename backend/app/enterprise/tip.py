@@ -60,7 +60,9 @@ def poll_feed(db, feed_row) -> int:
                  "c": int(obj.get("confidence", 50)), "s": feed_row.name,
                  "vu": obj.get("valid_until"), "l": obj.get("labels", [])})
             count += 1
-    db.execute(text("UPDATE taxii_feeds SET last_poll_at=now() WHERE id=:i"), {"i": str(feed_row.id)})
+    import datetime as _dt
+    db.execute(text("UPDATE taxii_feeds SET last_poll_at=:now WHERE id=:i"),
+               {"i": str(feed_row.id), "now": _dt.datetime.now(_dt.timezone.utc)})
     return count
 
 
@@ -69,10 +71,11 @@ def match(db, observables: list[tuple[str, str]]) -> list[dict]:
     """observables = [(type, value), ...] -> matching indicators (RLS-scoped)."""
     hits = []
     for typ, val in observables:
+        import datetime as _dt
         rows = db.execute(text("""
             SELECT id,type,value,confidence,source,labels FROM indicators
-            WHERE type=:t AND value=:v AND (valid_until IS NULL OR valid_until > now())"""),
-            {"t": typ, "v": val}).all()
+            WHERE type=:t AND value=:v AND (valid_until IS NULL OR valid_until > :now)"""),
+            {"t": typ, "v": val, "now": _dt.datetime.now(_dt.timezone.utc)}).all()
         for r in rows:
             hits.append({"indicator_id": str(r[0]), "type": r[1], "value": r[2],
                          "confidence": r[3], "source": r[4], "labels": list(r[5] or [])})
@@ -84,7 +87,7 @@ def enrich_incident(db, incident_id: int, source_ip: str) -> list[dict]:
     for h in hits:
         db.execute(text("""
             INSERT INTO sightings(org_id,indicator_id,incident_id,observed,context)
-            SELECT org_id,:ind,:inc,:obs,'{}'::jsonb FROM indicators WHERE id=:ind"""),
+            SELECT org_id,:ind,:inc,:obs,'{}' FROM indicators WHERE id=:ind"""),
             {"ind": h["indicator_id"], "inc": incident_id, "obs": source_ip})
     return hits
 
@@ -131,13 +134,23 @@ def search_indicators(type: str | None = None, value: str | None = None,
     if type:
         sql += " AND type=:t"; params["t"] = type
     if value:
-        sql += " AND value ILIKE :v"; params["v"] = f"%{value}%"
+        sql += " AND value LIKE :v"; params["v"] = f"%{value}%"
     rows = user.db.execute(text(sql + " ORDER BY confidence DESC LIMIT 200"), params).all()
     return [{"type": r[0], "value": r[1], "confidence": r[2], "source": r[3],
-             "valid_until": r[4].isoformat() if r[4] else None} for r in rows]
+             # SQLite returns DateTime columns as strings; Postgres as datetimes.
+             "valid_until": r[4].isoformat() if hasattr(r[4], "isoformat") else (r[4] or None)}
+            for r in rows]
 
 
 @router.get("/actors")
 def actors(user: Principal = Depends(require("read_only"))):
     rows = user.db.execute(text("SELECT name,aliases,description,source FROM threat_actors LIMIT 200")).all()
-    return [{"name": r[0], "aliases": list(r[1] or []), "description": r[2], "source": r[3]} for r in rows]
+    def _aliases(v):
+        if isinstance(v, str):              # SQLite returns JSON columns as strings
+            import json as _j
+            try:
+                return list(_j.loads(v) or [])
+            except (ValueError, TypeError):
+                return []
+        return list(v or [])
+    return [{"name": r[0], "aliases": _aliases(r[1]), "description": r[2], "source": r[3]} for r in rows]

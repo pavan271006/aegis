@@ -1,12 +1,19 @@
 import os
 import sys
 
-# Set env variables for local SQLite enterprise mode
-os.environ["AEGIS_ENTERPRISE"] = "1"
-os.environ["AEGIS_KEK"] = "KKpMzYUQkhmM0qAoGWmtsIp_X3B_1bWVt4svQTXH22c="
+# Load .env first so DATABASE_URL / AEGIS_* settings are available before any
+# SQLAlchemy engine is created.
+sys.path.insert(0, os.getcwd())
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.getcwd(), ".env"))
+except ImportError:
+    pass  # python-dotenv optional; env vars must already be set
 
-# Ensure python path is correct
-sys.path.append(os.getcwd())
+# Override / guarantee the enterprise vars needed for seeding.
+os.environ.setdefault("AEGIS_ENTERPRISE", "1")
+os.environ.setdefault("AEGIS_KEK", "KKpMzYUQkhmM0qAoGWmtsIp_X3B_1bWVt4svQTXH22c=")
+os.environ.setdefault("AEGIS_DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///./aegis.db"))
 
 from app.database import engine, init_db
 from sqlalchemy.orm import Session

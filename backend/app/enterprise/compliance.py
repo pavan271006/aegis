@@ -29,21 +29,35 @@ RETENTION_WHITELIST = {"events": "ts", "incidents": "created_at", "actions": "cr
 
 
 # ── tamper-evident audit ───────────────────────────────────────────────────
-def append_audit(db, actor: str, action: str, details: dict) -> str:
+def _canon_ts(v) -> str:
+    """Canonical timestamp for hashing — naive UTC isoformat. Must round-trip
+    identically whether the value comes from an in-memory datetime (append) or is
+    read back from the DB (verify). SQLite drops tzinfo on DateTime storage, so we
+    normalize both sides to UTC-without-tz to keep the hash chain reproducible."""
+    if isinstance(v, str):
+        import dateutil.parser
+        v = dateutil.parser.parse(v)
+    if v.tzinfo is not None:
+        v = v.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return v.isoformat()
+
+
+def append_audit(db, actor: str, action: str, details: dict, org_id: str = "") -> str:
     last = db.execute(text(
         "SELECT entry_hash FROM audit_log ORDER BY ts DESC, id DESC LIMIT 1")).scalar() or ""
     ts = dt.datetime.now(dt.timezone.utc)
-    canonical = json.dumps({"ts": ts.isoformat(), "actor": actor, "action": action,
+    canonical = json.dumps({"ts": _canon_ts(ts), "actor": actor, "action": action,
                             "details": details}, sort_keys=True, separators=(",", ":"))
     entry_hash = hashlib.sha256((last + canonical).encode()).hexdigest()
-    # audit_log is RLS-scoped; stamp the current org so the WITH CHECK passes and
-    # each tenant keeps its own hash chain.
-    db.execute(text("""
+    # On SQLite, `cast(:d AS json)` gives the column NUMERIC affinity and coerces the
+    # JSON string to 0 (data loss). Store the JSON text directly on SQLite; cast to
+    # json only on Postgres where the column is a real json/jsonb type.
+    detail_expr = ":d" if "sqlite" in db.bind.url.drivername else "cast(:d AS json)"
+    db.execute(text(f"""
         INSERT INTO audit_log(ts,actor,action,details,prev_hash,entry_hash,org_id)
-        VALUES (:ts,:a,:act, cast(:d AS json), :p,:h,
-                current_setting('app.current_org', true)::uuid)"""),
+        VALUES (:ts,:a,:act, {detail_expr}, :p,:h, :org)"""),
                {"ts": ts, "a": actor, "act": action, "d": json.dumps(details),
-                "p": last, "h": entry_hash})
+                "p": last, "h": entry_hash, "org": str(org_id)})
     return entry_hash
 
 
@@ -53,15 +67,15 @@ def verify_chain(user: Principal = Depends(require("admin"))):
         "SELECT id,ts,actor,action,details,prev_hash,entry_hash FROM audit_log ORDER BY ts,id")).all()
     prev = ""
     for r in rows:
-        ts_val = r[1]
-        if isinstance(ts_val, str):
-            import dateutil.parser
-            ts_str = dateutil.parser.parse(ts_val).isoformat()
-        else:
-            ts_str = ts_val.isoformat()
-            
+        ts_str = _canon_ts(r[1])            # same normalization append_audit used
+        details = r[4]
+        if isinstance(details, str):        # SQLite returns the JSON column as a string;
+            try:                            # append_audit hashed it as a dict, so parse back
+                details = json.loads(details)
+            except (ValueError, TypeError):
+                pass
         canonical = json.dumps({"ts": ts_str, "actor": r[2], "action": r[3],
-                                "details": r[4]}, sort_keys=True, separators=(",", ":"))
+                                "details": details}, sort_keys=True, separators=(",", ":"))
         expect = hashlib.sha256((prev + canonical).encode()).hexdigest()
         if r[5] != prev or r[6] != expect:
             return {"ok": False, "broken_at_id": r[0], "checked": len(rows)}
@@ -84,12 +98,14 @@ def gdpr_export(email: str, user: Principal = Depends(require("owner"))):
     if not m:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "subject not found in this organization")
 
-    audit = db.execute(text("SELECT ts,action,details FROM audit_log WHERE details::text ILIKE :e LIMIT 1000"),
+    audit = db.execute(text("SELECT ts,action,details FROM audit_log WHERE CAST(details AS TEXT) LIKE :e LIMIT 1000"),
                        {"e": f"%{email}%"}).all()
+    def _iso(v):                            # SQLite returns DateTime columns as strings
+        return v.isoformat() if hasattr(v, "isoformat") else (v or None)
     return {"subject": {"id": u[0], "email": u[1], "role": u[2],
-                        "created_at": u[3].isoformat() if u[3] else None},
+                        "created_at": _iso(u[3])},
             "memberships": [{"org_id": str(m[0]), "role": m[1], "status": m[2]}],
-            "audit_references": [{"ts": a[0].isoformat(), "action": a[1]} for a in audit]}
+            "audit_references": [{"ts": _iso(a[0]), "action": a[1]} for a in audit]}
 
 
 @router.post("/gdpr/erase")
@@ -113,7 +129,7 @@ def gdpr_erase(email: str, user: Principal = Depends(require("owner"))):
     ):
         db.execute(text(stmt), {"u": uid, "org": user.org_id})
 
-    append_audit(db, user.email, "gdpr_erase", {"subject_id": uid})
+    append_audit(db, user.email, "gdpr_erase", {"subject_id": uid}, org_id=str(user.org_id))
     return {"ok": True, "erased_user_id": uid}
 
 
@@ -126,8 +142,9 @@ def enforce_retention(db) -> dict:
         col = RETENTION_WHITELIST.get(table)
         if not col:
             continue
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=int(ttl))
         res = db.execute(text(
-            f"DELETE FROM {table} WHERE {col} < now() - (:d||' days')::interval"), {"d": ttl})
+            f"DELETE FROM {table} WHERE {col} < :cutoff"), {"cutoff": cutoff})
         deleted[table] = res.rowcount
     return deleted
 
@@ -145,8 +162,16 @@ def validate_backup(user: Principal = Depends(require("admin"))):
 
 def run_backup_validation() -> dict:
     """pg_dump the database, then prove the archive restores (TOC + object count).
-    Deep mode (restore into a scratch DB) is gated behind AEGIS_BACKUP_SCRATCH_DB."""
-    url = urlsplit(get_settings().database_url.replace("postgresql+psycopg2", "postgresql"))
+    Deep mode (restore into a scratch DB) is gated behind AEGIS_BACKUP_SCRATCH_DB.
+    SQLite databases are skipped (no pg_dump available)."""
+    db_url = get_settings().database_url
+    if "sqlite" in db_url:
+        import os as _os
+        path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
+        size = _os.path.getsize(path) if _os.path.exists(path) else 0
+        return {"ok": size > 0, "note": "sqlite backup not implemented", "db_bytes": size,
+                "verified_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    url = urlsplit(db_url.replace("postgresql+psycopg2", "postgresql"))
     env = {**os.environ, "PGPASSWORD": url.password or ""}
     db_name = url.path.lstrip("/")
     base = ["-h", url.hostname or "localhost", "-p", str(url.port or 5432),

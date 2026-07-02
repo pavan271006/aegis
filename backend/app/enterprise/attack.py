@@ -84,6 +84,12 @@ def coverage(days: int = 30, user: Principal = Depends(require("read_only"))):
     incs = user.db.execute(text(query), {"d": days}).all()
     counts: dict[str, int] = {}
     for (types,) in incs:
+        if isinstance(types, str):          # SQLite returns JSON columns as strings
+            import json as _j
+            try:
+                types = _j.loads(types)
+            except (ValueError, TypeError):
+                types = []
         for t in techniques_for(types or []):
             counts[t["technique_id"]] = counts.get(t["technique_id"], 0) + 1
     cells = []

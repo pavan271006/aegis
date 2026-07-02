@@ -19,7 +19,19 @@ class SecurityHeaders(BaseHTTPMiddleware):
         resp.headers.setdefault("Referrer-Policy", "no-referrer")
         resp.headers.setdefault("Strict-Transport-Security",
                                 "max-age=63072000; includeSubDomains; preload")
-        resp.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        # SPA-appropriate CSP: the API server also serves the console (self-hosted
+        # JS/CSS), so a blanket default-src 'none' would block the app from running.
+        # Still strong: same-origin only, with the Google Fonts CDN allowlisted.
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'",
+        )
         return resp
 
 
