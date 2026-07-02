@@ -81,6 +81,7 @@ const del = (p) => request(p, { method: "DELETE" });
 export const api = {
   // ── auth (v2) ──────────────────────────────────────────────────────────
   login: (email, password, org) => request("/api/v2/auth/login", { method: "POST", body: { email, password, org }, auth: false }),
+  devLogin: () => request("/api/v2/auth/dev-login", { method: "POST", auth: false }),   // DEV: credential-free owner session (404 in prod)
   completeMfa: (challenge, code) => request("/api/v2/auth/mfa", { method: "POST", body: { challenge, code }, auth: false }),
   logout: async () => {
     const rt = session.getRefresh();
